@@ -1,0 +1,9 @@
+{
+  "name": "cme",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Independent construction modeling engine for DCR workflows.",
+  "scripts": {
+    "test": "node --test"
+  }
+}
