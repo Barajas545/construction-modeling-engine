@@ -10,6 +10,8 @@ CME represents construction intent as structured, serializable project data. It 
 
 CME is in active construction-object development. **Deck Boundary**, the first production construction object, provides a structured walkable-surface model, validation, editing workflow, project persistence, and a professional modeling workspace. CME-0101 adds the shared modeling-interaction foundation: fluid viewport navigation, direct construction dimensions, intelligent snapping, adaptive grids, and contextual cursor feedback. CME-0102 establishes progressive construction modeling: one authoritative project grows from rapid field capture into detailed construction modeling without redrawing or duplicating geometry.
 
+Sprint 2 promotes every boundary segment into a typed construction edge with editable geometry and construction properties. **Stairs**, the first attached construction object, reshape the authoritative boundary and derive their tread graphics from stable model references.
+
 ## Run the workspace
 
 Use `npm start`, then open `http://localhost:4173`. The workspace stores the active project locally in the browser and can export a portable `.cme.json` project file.

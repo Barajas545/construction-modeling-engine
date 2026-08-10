@@ -1,6 +1,9 @@
 # Stairs
 
-Stairs — models stair systems and their construction relationships.
+Stairs is the first construction object that enriches and reshapes existing Deck Boundary geometry.
 
-This folder is a roadmap placeholder. Do not implement behavior until Product Lab provides and approves the corresponding specification. Future work must keep data structured and serializable, use shared services from `src/core/`, include automated tests, and validate against the official examples.
+Users select a boundary construction edge and define the staircase rather than drawing individual steps. CME calculates the riser count, actual riser height, total run, opening vertices, generated boundary segments, and tread graphics.
 
+The Stair object stores dimensions and stable references to its host boundary and generated anchors. Tread geometry is derived from those references, preventing overlapping independent geometry.
+
+The initial implementation provides planning geometry, not code-compliance or structural approval. Those policies require future Product Lab specifications and jurisdiction-aware validation.

@@ -1,12 +1,14 @@
 import { createProjectDocument, parseProject, serializeProject, setProjectWorkflowStage, upsertObject } from '../core/document/project-document.js';
 import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
+import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
 import { collectSnapTargets, resolveSnap } from '../core/geometry/snap-engine.js';
 import { nearestPointOnSegment } from '../core/geometry/vector.js';
 import { formatFeetInches, formatSquareFeet } from '../core/units/length.js';
 import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
-import { createDeckBoundary, establishDeckBoundary, getBoundaryLifecycle, insertVertex, markBoundaryEdited, removeVertex, setEdgeRole, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { constrainEdge, createDeckBoundary, establishDeckBoundary, getBoundaryLifecycle, insertVertex, markBoundaryEdited, offsetEdge, removeVertex, setEdgeLength, setEdgeRole, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { attachStairToBoundary, calculateStairLayout, deriveStairTreads, validateStairPlacement } from '../tools/stairs/stair.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'cme.project.v1';
@@ -18,6 +20,8 @@ let draft = [];
 let pointerWorld = null;
 let draggingVertexId = null;
 let dragStartDocument = null;
+let draggingEdgeId = null;
+let edgeDragStart = null;
 let selected = { kind: null, id: null };
 let message = 'Ready';
 let viewport = createViewport();
@@ -32,6 +36,7 @@ let viewportAnimation = 0;
 const activeTouches = new Map();
 let touchGesture = null;
 let pendingTouch = null;
+let stairDraft = null;
 
 function loadProject() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -86,6 +91,7 @@ function render() {
         <nav class="toolrail" aria-label="Modeling tools">
           <button class="tool-button ${mode === 'select' ? 'active' : ''}" data-mode="select" title="Select and edit"><span class="tool-icon">↖</span><span class="tool-label">Select</span></button>
           <button class="tool-button ${mode === 'draw' ? 'active' : ''}" data-mode="draw" title="Draw a custom deck boundary"><span class="tool-icon">◇</span><span class="tool-label">Boundary</span></button>
+          <button class="tool-button ${mode === 'stair' ? 'active' : ''}" data-mode="stair" title="Attach stairs to a boundary edge" ${!current ? 'disabled' : ''}><span class="tool-icon">▰</span><span class="tool-label">Stairs</span></button>
           <div class="tool-spacer"></div>
           <button class="tool-button" data-action="toggle-inspector" title="Project details"><span class="tool-icon">☷</span><span class="tool-label">Details</span></button>
         </nav>
@@ -125,13 +131,38 @@ function renderInspector(current, validation) {
     <section class="inspector-section"><div class="eyebrow">Fast start</div><h2>Rectangle deck</h2><p class="section-copy">Enter the outside dimensions of the walkable surface.</p><div class="field-grid"><div class="field"><label for="width">Width (ft)</label><input id="width" type="number" min="1" step="0.5" value="16"></div><div class="field"><label for="depth">Depth (ft)</label><input id="depth" type="number" min="1" step="0.5" value="12"></div></div><div class="action-stack"><button class="button primary" data-action="create-rectangle">Create deck boundary</button><button class="button" data-mode="draw">Draw a custom outline</button></div><div class="hint-card">Measure the outside edge of the finished walking surface. Structural framing will connect to this boundary in future tools.</div></section>`;
   const selectedEdge = selected.kind === 'edge' ? current.edges.find((edge) => edge.id === selected.id) : null;
   const selectedVertex = selected.kind === 'vertex' ? current.vertices.find((vertex) => vertex.id === selected.id) : null;
+  const selectedStair = selected.kind === 'stair' ? documentModel.objects.find((object) => object.type === 'stair' && object.id === selected.id) : null;
   const lifecycle = getBoundaryLifecycle(current);
   const firstIssue = validation.issues[0];
   return `
     <section class="inspector-section"><div class="object-status"><div><div class="eyebrow">Deck Boundary</div><h2>${escapeHtml(current.name)}</h2></div><span class="object-badge ${lifecycle.phase}">${lifecycle.phase === 'established' ? 'Authoritative' : 'Review'}</span></div><p class="section-copy">${lifecycle.phase === 'established' ? 'The authoritative walkable surface. Continue refining it as project detail grows.' : 'A completed sketch awaiting field confirmation before it becomes authoritative.'}</p><div class="metric-grid"><div class="metric"><div class="metric-label">Surface area</div><div class="metric-value">${formatSquareFeet(current.computed.areaSquareInches)}</div></div><div class="metric"><div class="metric-label">Perimeter</div><div class="metric-value">${formatFeetInches(current.computed.perimeterInches)}</div></div><div class="metric"><div class="metric-label">Corners</div><div class="metric-value">${current.vertices.length}</div></div><div class="metric"><div class="metric-label">Revision</div><div class="metric-value">${lifecycle.revision}</div></div></div><div class="validation ${validation.valid ? '' : 'error'}"><span class="validation-dot"></span><span>${validation.valid ? lifecycle.phase === 'established' ? 'Construction object is valid and remains fully editable.' : 'Sketch is valid. Establish it when field measurements are confirmed.' : escapeHtml(firstIssue?.message ?? 'Boundary needs attention.')}</span></div></section>
-    ${selectedEdge ? `<section class="inspector-section"><div class="eyebrow">Selected edge</div><h2>Construction relationship</h2><p class="section-copy">Mark how future objects should connect to this edge.</p><div class="field-grid"><div class="field full"><label for="edge-role">Edge role</label><select id="edge-role"><option value="open" ${selectedEdge.role === 'open' ? 'selected' : ''}>Unassigned</option><option value="house" ${selectedEdge.role === 'house' ? 'selected' : ''}>House attachment</option><option value="free-edge" ${selectedEdge.role === 'free-edge' ? 'selected' : ''}>Open deck edge</option></select></div></div><div class="hint-card">This relationship is stored on a stable edge ID so future railing, fascia, and house-attachment tools can reference it.</div></section>` : ''}
+    ${selectedEdge ? renderEdgeInspector(current, selectedEdge) : ''}
+    ${stairDraft && selectedEdge ? renderStairInspector(current, selectedEdge) : ''}
+    ${selectedStair ? renderStairObjectInspector(selectedStair) : ''}
     ${selectedVertex ? `<section class="inspector-section"><div class="eyebrow">Selected corner</div><h2>Corner position</h2><p class="section-copy">Drag this corner in the workspace. Movement snaps to ½-inch increments and nearby axes.</p><div class="action-stack"><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Remove corner</button></div></section>` : ''}
     <section class="inspector-section"><div class="eyebrow">Project model</div><h2>Ready for future objects</h2><p class="section-copy">Edges and corners keep stable identities for house attachments, stairs, railings, fascia, framing, and takeoff.</p><div class="action-stack"><button class="button" data-action="new-boundary">Start over</button></div></section>`;
+}
+
+function renderStairObjectInspector(stair) {
+  return `<section class="inspector-section stair-panel"><div class="object-status"><div><div class="eyebrow">Stair construction object</div><h2>${escapeHtml(stair.name)}</h2></div><span class="object-badge established">Attached</span></div><p class="section-copy">Generated from the authoritative Deck Boundary. Treads remain derived from the referenced opening.</p><div class="metric-grid"><div class="metric"><div class="metric-label">Clear width</div><div class="metric-value">${formatFeetInches(stair.dimensions.width)}</div></div><div class="metric"><div class="metric-label">Total rise</div><div class="metric-value">${formatFeetInches(stair.dimensions.totalRise)}</div></div><div class="metric"><div class="metric-label">Risers</div><div class="metric-value">${stair.dimensions.stepCount}</div></div><div class="metric"><div class="metric-label">Total run</div><div class="metric-value">${formatFeetInches(stair.dimensions.totalRun)}</div></div></div><div class="validation"><span class="validation-dot"></span><span>Stair anchors and generated edges are part of the project model.</span></div></section>`;
+}
+
+function renderEdgeInspector(current, edge) {
+  const normalized = normalizeBoundaryEdge(edge);
+  const index = current.edges.findIndex((entry) => entry.id === edge.id);
+  const start = current.vertices[index];
+  const end = current.vertices[(index + 1) % current.vertices.length];
+  const length = Math.hypot(end.x - start.x, end.y - start.y);
+  const properties = normalized.properties;
+  return `<section class="inspector-section edge-inspector"><div class="object-status"><div><div class="eyebrow">Construction edge</div><h2>${formatFeetInches(length)}</h2></div><span class="object-badge established">Independent</span></div><p class="section-copy">Drag the edge to move it, or refine it with exact construction dimensions.</p><div class="field-grid"><div class="field full"><label for="edge-length">Exact edge length</label><div class="compound-field"><input id="edge-length" value="${formatFeetInches(length)}"><button class="button" data-action="apply-edge-length">Apply</button></div></div><div class="field full"><label for="edge-offset">Move perpendicular</label><div class="compound-field"><input id="edge-offset" placeholder="6 in"><button class="button" data-action="apply-edge-offset">Move</button></div></div></div><div class="constraint-row"><button class="button ${properties.custom.geometricConstraint === 'horizontal' ? 'active-constraint' : ''}" data-action="constraint-horizontal">Horizontal</button><button class="button ${properties.custom.geometricConstraint === 'vertical' ? 'active-constraint' : ''}" data-action="constraint-vertical">Vertical</button></div><div class="property-list"><label><input type="checkbox" data-edge-property="fascia" ${properties.finishes.fascia ? 'checked' : ''}><span><strong>Fascia</strong><small>Exterior finish board</small></span></label><label><input type="checkbox" data-edge-property="pictureFrame" ${properties.finishes.pictureFrame ? 'checked' : ''}><span><strong>Picture frame</strong><small>Decking board along edge</small></span></label><label><input type="checkbox" data-edge-property="demolition" ${properties.existingConditions.demolition ? 'checked' : ''}><span><strong>Demolition</strong><small>Existing edge to remove</small></span></label></div><div class="field-grid"><div class="field full"><label for="edge-role">Construction relationship</label><select id="edge-role"><option value="open" ${edge.role === 'open' ? 'selected' : ''}>Unassigned</option><option value="house" ${edge.role === 'house' ? 'selected' : ''}>House attachment</option><option value="free-edge" ${edge.role === 'free-edge' ? 'selected' : ''}>Open deck edge</option></select></div><div class="field full"><label for="edge-railing">Railing intent</label><select id="edge-railing"><option value="unassigned" ${properties.safety.railing === 'unassigned' ? 'selected' : ''}>Unassigned</option><option value="required" ${properties.safety.railing === 'required' ? 'selected' : ''}>Railing required</option><option value="existing" ${properties.safety.railing === 'existing' ? 'selected' : ''}>Existing railing</option></select></div></div><div class="action-stack"><button class="button primary" data-action="start-stair">Attach staircase</button></div></section>`;
+}
+
+function renderStairInspector(current, edge) {
+  const settings = stairDraft;
+  const parsed = { width: parseConstructionLength(settings.width), totalRise: parseConstructionLength(settings.totalRise), treadDepth: parseConstructionLength(settings.treadDepth), targetRiserHeight: 7.5 };
+  const validation = validateStairPlacement(current, edge.id, parsed);
+  const layout = validation.valid ? calculateStairLayout(parsed.totalRise, 7.5, parsed.treadDepth) : null;
+  return `<section class="inspector-section stair-panel"><div class="eyebrow">Stair definition</div><h2>Define the staircase</h2><p class="section-copy">CME will generate the opening, run, and individual treads from this edge.</p><div class="field-grid"><div class="field"><label for="stair-width">Clear width</label><input id="stair-width" value="${escapeHtml(settings.width)}"></div><div class="field"><label for="stair-rise">Total rise</label><input id="stair-rise" value="${escapeHtml(settings.totalRise)}"></div><div class="field full"><label for="stair-tread">Target tread depth</label><input id="stair-tread" value="${escapeHtml(settings.treadDepth)}"></div></div>${layout ? `<div class="stair-summary"><div><strong>${layout.stepCount}</strong><span>risers</span></div><div><strong>${formatFeetInches(layout.riserHeight)}</strong><span>each rise</span></div><div><strong>${formatFeetInches(layout.totalRun)}</strong><span>total run</span></div></div>` : `<div class="validation error"><span class="validation-dot"></span><span>${escapeHtml(validation.issues[0] ?? 'Check stair dimensions.')}</span></div>`}<div class="action-stack"><button class="button primary" data-action="confirm-stair" ${validation.valid ? '' : 'disabled'}>Build staircase</button><button class="button" data-action="cancel-stair">Cancel</button></div><div class="hint-card">Planning geometry only. Final code compliance and structural design remain future validation layers.</div></section>`;
 }
 
 function drawCanvas(svg, current, validation) {
@@ -146,8 +177,43 @@ function drawCanvas(svg, current, validation) {
   defs.append(minor, major);
   svg.append(defs, svgElement('rect', { x: viewport.x, y: viewport.y, width: viewport.width, height: viewport.height, fill: gridVisible ? 'url(#majorGrid)' : '#0d1114' }));
   svg.append(svgElement('line', { x1: viewport.x, y1: '0', x2: viewport.x + viewport.width, y2: '0', class: 'axis-line' }), svgElement('line', { x1: '0', y1: viewport.y, x2: '0', y2: viewport.y + viewport.height, class: 'axis-line' }));
-  if (current) renderBoundarySvg(svg, current, validation);
+  if (current) {
+    renderBoundarySvg(svg, current, validation);
+    renderStairGraphics(svg, current);
+    renderStairPreview(svg, current);
+  }
   if (draft.length) renderDraft(svg);
+}
+
+function renderStairGraphics(svg, current) {
+  documentModel.objects.filter((object) => object.type === 'stair' && object.host.boundaryId === current.id).forEach((stair) => renderStairShape(svg, current, stair, false));
+}
+
+function renderStairPreview(svg, current) {
+  if (!stairDraft || !selected.id) return;
+  const options = {
+    width: parseConstructionLength(stairDraft.width),
+    totalRise: parseConstructionLength(stairDraft.totalRise),
+    treadDepth: parseConstructionLength(stairDraft.treadDepth),
+  };
+  if (!validateStairPlacement(current, selected.id, options).valid) return;
+  let count = 0;
+  try {
+    const preview = attachStairToBoundary(current, selected.id, options, (prefix) => `preview-${prefix}-${++count}`);
+    renderStairShape(svg, preview.boundary, preview.stair, true);
+  } catch { /* Inspector communicates invalid planning dimensions. */ }
+}
+
+function renderStairShape(svg, current, stair, preview) {
+  const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+  const ids = stair.anchors;
+  const polygonPoints = [ids.openingStartVertexId, ids.outerStartVertexId, ids.outerEndVertexId, ids.openingEndVertexId]
+    .map((id) => byId.get(id)).filter(Boolean);
+  if (polygonPoints.length !== 4) return;
+  svg.append(svgElement('polygon', { points: polygonPoints.map((point) => `${point.x},${point.y}`).join(' '), class: preview ? 'stair-preview-fill' : 'stair-construction-fill' }));
+  deriveStairTreads(current, stair).forEach((tread, index) => {
+    svg.append(svgElement('line', { x1: tread.start.x, y1: tread.start.y, x2: tread.end.x, y2: tread.end.y, class: preview ? 'stair-preview-tread' : 'stair-tread', 'data-step': index + 1 }));
+  });
 }
 
 function renderBoundarySvg(svg, current, validation) {
@@ -156,6 +222,7 @@ function renderBoundarySvg(svg, current, validation) {
   current.edges.forEach((edge, index) => {
     const start = current.vertices[index];
     const end = current.vertices[(index + 1) % current.vertices.length];
+    renderEdgeConstructionGraphics(svg, current, start, end, normalizeBoundaryEdge(edge).properties);
     const selectedClass = selected.kind === 'edge' && selected.id === edge.id ? 'selected' : '';
     svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `boundary-edge-visible ${edge.role} ${selectedClass}` }));
     const hit = svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'boundary-edge', 'data-edge-id': edge.id });
@@ -168,6 +235,37 @@ function renderBoundarySvg(svg, current, validation) {
     svg.append(svgElement('rect', { x: vertex.x - hitSize / 2, y: vertex.y - hitSize / 2, width: hitSize, height: hitSize, class: 'vertex-hit', 'data-vertex-id': vertex.id }));
     svg.append(svgElement('rect', { x: vertex.x - markerSize / 2, y: vertex.y - markerSize / 2, width: markerSize, height: markerSize, rx: markerSize * .12, class: `vertex ${selected.kind === 'vertex' && selected.id === vertex.id ? 'selected' : ''}`, transform: `rotate(45 ${vertex.x} ${vertex.y})` }));
   });
+}
+
+function renderEdgeConstructionGraphics(svg, current, start, end, properties) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const length = Math.hypot(dx, dy);
+  if (!length) return;
+  const signedArea = current.vertices.reduce((sum, vertex, index) => {
+    const next = current.vertices[(index + 1) % current.vertices.length];
+    return sum + vertex.x * next.y - next.x * vertex.y;
+  }, 0);
+  const interiorSign = signedArea >= 0 ? 1 : -1;
+  const interior = { x: -dy / length * interiorSign, y: dx / length * interiorSign };
+  if (properties.finishes.pictureFrame) {
+    svg.append(svgElement('line', { x1: start.x + interior.x * 3, y1: start.y + interior.y * 3, x2: end.x + interior.x * 3, y2: end.y + interior.y * 3, class: 'picture-frame-board' }));
+  }
+  if (properties.finishes.fascia) {
+    svg.append(svgElement('line', { x1: start.x - interior.x * 1.5, y1: start.y - interior.y * 1.5, x2: end.x - interior.x * 1.5, y2: end.y - interior.y * 1.5, class: 'fascia-board' }));
+  }
+  if (properties.existingConditions.demolition) {
+    svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'demolition-edge' }));
+  }
+  if (properties.safety.railing === 'required' || properties.safety.railing === 'existing') {
+    const postCount = Math.max(2, Math.ceil(length / 48) + 1);
+    for (let index = 0; index < postCount; index += 1) {
+      const t = index / (postCount - 1);
+      const x = start.x + dx * t;
+      const y = start.y + dy * t;
+      svg.append(svgElement('rect', { x: x - 2, y: y - 2, width: 4, height: 4, class: `railing-post ${properties.safety.railing}` }));
+    }
+  }
 }
 
 function addDimension(svg, start, end) {
@@ -204,6 +302,18 @@ function bindEvents() {
   app.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button.dataset.action)));
   const role = app.querySelector('#edge-role');
   if (role) role.addEventListener('change', () => commitBoundary(markBoundaryEdited(setEdgeRole(boundary(), selected.id, role.value)), 'Set edge relationship'));
+  const railing = app.querySelector('#edge-railing');
+  if (railing) railing.addEventListener('change', () => { message = 'Railing intent updated'; commitBoundary(markBoundaryEdited(updateEdgeProperties(boundary(), selected.id, { safety: { railing: railing.value } })), 'Update edge railing intent'); });
+  app.querySelectorAll('[data-edge-property]').forEach((input) => input.addEventListener('change', () => {
+    const key = input.dataset.edgeProperty;
+    const patch = key === 'demolition' ? { existingConditions: { demolition: input.checked } } : { finishes: { [key]: input.checked } };
+    message = `${key} property updated`;
+    commitBoundary(markBoundaryEdited(updateEdgeProperties(boundary(), selected.id, patch)), 'Update edge construction properties');
+  }));
+  [['#stair-width', 'width'], ['#stair-rise', 'totalRise'], ['#stair-tread', 'treadDepth']].forEach(([selector, key]) => {
+    const input = app.querySelector(selector);
+    if (input) input.addEventListener('change', () => { stairDraft[key] = input.value; render(); });
+  });
   const gridSpacing = app.querySelector('#grid-spacing');
   if (gridSpacing) gridSpacing.addEventListener('change', () => { gridSetting = gridSpacing.value; render(); });
   const gridVisibility = app.querySelector('#grid-visible');
@@ -221,15 +331,17 @@ function bindEvents() {
 function setMode(nextMode) {
   mode = nextMode;
   numericBuffer = '';
+  if (mode !== 'stair') stairDraft = null;
   if (mode !== 'draw') { draft = []; pointerWorld = null; message = 'Ready'; }
-  else message = 'Click the first corner of the deck';
+  if (mode === 'draw') message = 'Click the first corner of the deck';
+  if (mode === 'stair') message = 'Select the boundary edge where the staircase begins';
   render();
 }
 
 function canvasPointerDown(svg, event) {
   const vertexId = event.target.dataset.vertexId;
   const edgeId = event.target.dataset.edgeId;
-  if (event.pointerType === 'touch' && !(mode === 'select' && (vertexId || edgeId))) {
+  if (event.pointerType === 'touch' && !((mode === 'select' && (vertexId || edgeId)) || (mode === 'stair' && edgeId))) {
     event.preventDefault();
     activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     svg.setPointerCapture(event.pointerId);
@@ -273,6 +385,16 @@ function canvasPointerDown(svg, event) {
   }
   if (mode === 'select' && edgeId) {
     selected = { kind: 'edge', id: edgeId };
+    draggingEdgeId = edgeId;
+    edgeDragStart = { document: documentModel, boundary: boundary(), point: screenToWorld(svg, event), moved: false };
+    svg.setPointerCapture(event.pointerId);
+    drawCanvasRefresh();
+    return;
+  }
+  if (mode === 'stair' && edgeId) {
+    selected = { kind: 'edge', id: edgeId };
+    stairDraft = { edgeId, width: '36 in', totalRise: '36 in', treadDepth: '10 in' };
+    message = 'Review the generated stair layout';
     render();
     return;
   }
@@ -318,6 +440,21 @@ function canvasPointerMove(svg, event) {
     return;
   }
   const raw = screenToWorld(svg, event);
+  if (draggingEdgeId && edgeDragStart) {
+    const original = edgeDragStart.boundary;
+    const edgeIndex = original.edges.findIndex((edge) => edge.id === draggingEdgeId);
+    const start = original.vertices[edgeIndex];
+    const end = original.vertices[(edgeIndex + 1) % original.vertices.length];
+    const length = Math.hypot(end.x - start.x, end.y - start.y);
+    const normal = { x: -(end.y - start.y) / length, y: (end.x - start.x) / length };
+    const offset = (raw.x - edgeDragStart.point.x) * normal.x + (raw.y - edgeDragStart.point.y) * normal.y;
+    if (Math.abs(offset) > viewport.width / svg.clientWidth * 3) edgeDragStart.moved = true;
+    const moved = offsetEdge(original, draggingEdgeId, offset);
+    documentModel = upsertObject(edgeDragStart.document, moved);
+    persist();
+    drawCanvasRefresh();
+    return;
+  }
   if (draggingVertexId && boundary()) {
     const current = boundary();
     const index = current.vertices.findIndex((vertex) => vertex.id === draggingVertexId);
@@ -365,8 +502,18 @@ function finishPointerGesture(svg, event) {
     documentModel = dragStartDocument;
     commit(finalDocument, 'Move boundary corner');
   }
+  if (draggingEdgeId && edgeDragStart) {
+    if (edgeDragStart.moved) {
+      const finalDocument = upsertObject(documentModel, markBoundaryEdited(boundary()));
+      documentModel = edgeDragStart.document;
+      message = 'Construction edge moved';
+      commit(finalDocument, 'Move boundary edge');
+    } else render();
+  }
   draggingVertexId = null;
   dragStartDocument = null;
+  draggingEdgeId = null;
+  edgeDragStart = null;
 }
 
 function snapForPointer(raw, anchor, extraVertices = [], excludedIds = new Set()) {
@@ -447,6 +594,34 @@ function handleAction(action) {
     message = 'Deck boundary created from field dimensions';
   }
   if (action === 'complete-draft') completeDraft();
+  if (action === 'apply-edge-length' && selected.kind === 'edge') {
+    const length = parseConstructionLength(app.querySelector('#edge-length')?.value);
+    if (!length) { message = 'Enter a valid construction length'; render(); }
+    else { message = 'Edge length updated precisely'; commitBoundary(markBoundaryEdited(setEdgeLength(boundary(), selected.id, length)), 'Set boundary edge length'); }
+  }
+  if (action === 'apply-edge-offset' && selected.kind === 'edge') {
+    const offset = parseConstructionLength(app.querySelector('#edge-offset')?.value);
+    if (offset === null) { message = 'Enter an offset such as 6 in or -1 ft'; render(); }
+    else { message = 'Construction edge moved'; commitBoundary(markBoundaryEdited(offsetEdge(boundary(), selected.id, offset)), 'Offset boundary edge'); }
+  }
+  if (action === 'constraint-horizontal' && selected.kind === 'edge') { message = 'Horizontal relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'horizontal')), 'Constrain edge horizontal'); }
+  if (action === 'constraint-vertical' && selected.kind === 'edge') { message = 'Vertical relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'vertical')), 'Constrain edge vertical'); }
+  if (action === 'start-stair' && selected.kind === 'edge') { mode = 'stair'; stairDraft = { edgeId: selected.id, width: '36 in', totalRise: '36 in', treadDepth: '10 in' }; message = 'Define the staircase from this construction edge'; render(); }
+  if (action === 'cancel-stair') { stairDraft = null; mode = 'select'; message = 'Stair placement canceled'; render(); }
+  if (action === 'confirm-stair' && stairDraft && selected.kind === 'edge') {
+    const options = { width: parseConstructionLength(stairDraft.width), totalRise: parseConstructionLength(stairDraft.totalRise), treadDepth: parseConstructionLength(stairDraft.treadDepth) };
+    try {
+      const attached = attachStairToBoundary(boundary(), selected.id, options);
+      let next = upsertObject(documentModel, markBoundaryEdited(attached.boundary));
+      next = upsertObject(next, attached.stair);
+      selected = { kind: 'stair', id: attached.stair.id };
+      stairDraft = null;
+      mode = 'select';
+      message = `${attached.stair.dimensions.stepCount}-riser staircase added to the project model`;
+      commit(next, 'Attach staircase to Deck Boundary');
+      fitProject();
+    } catch (error) { message = error.message; render(); }
+  }
   if (action === 'undo') { documentModel = history.undo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Undid last change'; render(); }
   if (action === 'redo') { documentModel = history.redo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Redid change'; render(); }
   if (action === 'delete-vertex' && selected.kind === 'vertex') { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }

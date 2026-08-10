@@ -1,4 +1,5 @@
 import { distance, findSelfIntersections, polygonArea, polygonPerimeter } from '../../core/geometry/vector.js';
+import { createEdgeProperties, mergeEdgeProperties, normalizeBoundaryEdge } from '../../core/construction-objects/edge-properties.js';
 
 export const DECK_BOUNDARY_TYPE = 'deck-boundary';
 export const DECK_BOUNDARY_SCHEMA_VERSION = 1;
@@ -23,12 +24,13 @@ export function createDeckBoundary(vertices, options = {}) {
     name: options.name ?? 'Main deck boundary',
     closed: true,
     vertices: normalizedVertices,
-    edges: normalizedVertices.map((vertex, index) => ({
+    edges: normalizedVertices.map((vertex, index) => normalizeBoundaryEdge({
       id: edgeIds[index] ?? idFactory('edge'),
       startVertexId: vertex.id,
       endVertexId: normalizedVertices[(index + 1) % normalizedVertices.length]?.id,
       role: 'open',
       metadata: {},
+      properties: createEdgeProperties(),
     })),
     metadata: { tags: [], ...(options.metadata ?? {}) },
     lifecycle: {
@@ -99,8 +101,8 @@ export function insertVertex(boundary, edgeId, position, idFactory = defaultId) 
   const existingEdge = boundary.edges[edgeIndex];
   const edges = [...boundary.edges];
   edges.splice(edgeIndex, 1,
-    { ...existingEdge, endVertexId: vertex.id },
-    { id: idFactory('edge'), startVertexId: vertex.id, endVertexId: existingEdge.endVertexId, role: existingEdge.role, metadata: {} });
+    normalizeBoundaryEdge({ ...existingEdge, endVertexId: vertex.id }),
+    normalizeBoundaryEdge({ id: idFactory('edge'), startVertexId: vertex.id, endVertexId: existingEdge.endVertexId, role: existingEdge.role, metadata: {}, properties: existingEdge.properties }));
   return withComputedProperties({ ...boundary, vertices: vertices.map((entry, order) => ({ ...entry, order })), edges });
 }
 
@@ -113,7 +115,7 @@ export function removeVertex(boundary, vertexId) {
   const previousEdge = boundary.edges[previousEdgeIndex];
   const removedEdge = boundary.edges[removedEdgeIndex];
   const edges = boundary.edges.filter((_, edgeIndex) => edgeIndex !== removedEdgeIndex)
-    .map((edge) => edge.id === previousEdge.id ? { ...edge, endVertexId: removedEdge.endVertexId } : edge);
+    .map((edge) => normalizeBoundaryEdge(edge.id === previousEdge.id ? { ...edge, endVertexId: removedEdge.endVertexId } : edge));
   const vertices = boundary.vertices.filter((vertex) => vertex.id !== vertexId)
     .map((vertex, order) => ({ ...vertex, order }));
   return withComputedProperties({ ...boundary, vertices, edges });
@@ -122,7 +124,63 @@ export function removeVertex(boundary, vertexId) {
 export function setEdgeRole(boundary, edgeId, role) {
   const allowedRoles = ['open', 'house', 'free-edge'];
   if (!allowedRoles.includes(role)) throw new Error(`Unsupported deck edge role: ${role}`);
-  return { ...boundary, edges: boundary.edges.map((edge) => edge.id === edgeId ? { ...edge, role } : edge) };
+  return {
+    ...boundary,
+    edges: boundary.edges.map((edge) => edge.id === edgeId ? normalizeBoundaryEdge({
+      ...edge,
+      role,
+      properties: mergeEdgeProperties(edge.properties, { classification: { relationship: role === 'house' ? 'house-attachment' : role } }),
+    }) : normalizeBoundaryEdge(edge)),
+  };
+}
+
+export function updateEdgeProperties(boundary, edgeId, patch) {
+  return {
+    ...boundary,
+    edges: boundary.edges.map((edge) => edge.id === edgeId
+      ? normalizeBoundaryEdge({ ...edge, properties: mergeEdgeProperties(edge.properties, patch) })
+      : normalizeBoundaryEdge(edge)),
+  };
+}
+
+export function setEdgeLength(boundary, edgeId, length) {
+  if (!Number.isFinite(length) || length < MIN_EDGE_LENGTH) throw new Error('Edge length must be at least 6 inches.');
+  const index = boundary.edges.findIndex((edge) => edge.id === edgeId);
+  if (index < 0) throw new Error('Deck boundary edge was not found.');
+  const start = boundary.vertices[index];
+  const endIndex = (index + 1) % boundary.vertices.length;
+  const end = boundary.vertices[endIndex];
+  const currentLength = distance(start, end);
+  const dx = (end.x - start.x) / currentLength;
+  const dy = (end.y - start.y) / currentLength;
+  return updateVertex(boundary, end.id, { x: start.x + dx * length, y: start.y + dy * length });
+}
+
+export function offsetEdge(boundary, edgeId, offset) {
+  if (!Number.isFinite(offset)) throw new Error('Edge offset must be a number.');
+  const index = boundary.edges.findIndex((edge) => edge.id === edgeId);
+  if (index < 0) throw new Error('Deck boundary edge was not found.');
+  const start = boundary.vertices[index];
+  const end = boundary.vertices[(index + 1) % boundary.vertices.length];
+  const length = distance(start, end);
+  const normal = { x: -(end.y - start.y) / length, y: (end.x - start.x) / length };
+  const movedStart = { x: start.x + normal.x * offset, y: start.y + normal.y * offset };
+  const movedEnd = { x: end.x + normal.x * offset, y: end.y + normal.y * offset };
+  return updateVertex(updateVertex(boundary, start.id, movedStart), end.id, movedEnd);
+}
+
+export function constrainEdge(boundary, edgeId, constraint) {
+  if (!['horizontal', 'vertical'].includes(constraint)) throw new Error(`Unsupported edge constraint: ${constraint}`);
+  const index = boundary.edges.findIndex((edge) => edge.id === edgeId);
+  if (index < 0) throw new Error('Deck boundary edge was not found.');
+  const start = boundary.vertices[index];
+  const end = boundary.vertices[(index + 1) % boundary.vertices.length];
+  const length = distance(start, end);
+  const direction = constraint === 'horizontal'
+    ? { x: Math.sign(end.x - start.x) || 1, y: 0 }
+    : { x: 0, y: Math.sign(end.y - start.y) || 1 };
+  const constrained = updateVertex(boundary, end.id, { x: start.x + direction.x * length, y: start.y + direction.y * length });
+  return updateEdgeProperties(constrained, edgeId, { custom: { geometricConstraint: constraint } });
 }
 
 export function validateDeckBoundary(boundary) {

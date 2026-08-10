@@ -63,6 +63,15 @@ button { color: inherit; }
 .boundary-edge-visible { stroke: var(--cyan); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
 .boundary-edge-visible.house { stroke: var(--accent); stroke-width: 4; }
 .boundary-edge-visible.selected { stroke: #fff; stroke-width: 3; }
+.picture-frame-board { stroke: #91a4a7; stroke-width: 7; vector-effect: non-scaling-stroke; opacity: .52; }
+.fascia-board { stroke: #607177; stroke-width: 6; vector-effect: non-scaling-stroke; }
+.demolition-edge { stroke: #b3bec0; stroke-width: 2; stroke-dasharray: 7 5; vector-effect: non-scaling-stroke; opacity: .8; }
+.railing-post { fill: #d8ff62; stroke: #11171a; stroke-width: 1; vector-effect: non-scaling-stroke; }
+.railing-post.existing { fill: #829096; }
+.stair-construction-fill { fill: rgb(63 78 84 / 65%); stroke: #91a4a7; stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.stair-tread { stroke: #d1d9da; stroke-width: 1.2; vector-effect: non-scaling-stroke; pointer-events: none; }
+.stair-preview-fill { fill: rgb(216 255 98 / 8%); stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.stair-preview-tread { stroke: rgb(216 255 98 / 65%); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; pointer-events: none; }
 .vertex { fill: #0d1114; stroke: #f1f5f4; stroke-width: 1.6; vector-effect: non-scaling-stroke; pointer-events: none; }
 .vertex-hit { fill: transparent; cursor: grab; }
 .vertex.selected { fill: var(--accent); stroke: #fff; }
@@ -117,6 +126,20 @@ button { color: inherit; }
 .field label { color: var(--muted); font-size: 10px; font-weight: 650; }
 .field input, .field select { min-width: 0; height: 36px; border: 1px solid var(--line); border-radius: 7px; background: #0c1114; color: var(--text); padding: 0 9px; outline: none; }
 .field input:focus, .field select:focus { border-color: var(--accent-deep); box-shadow: 0 0 0 3px rgb(216 255 98 / 7%); }
+.compound-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.compound-field .button { min-height: 36px; }
+.constraint-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; }
+.button.active-constraint { border-color: rgb(216 255 98 / 48%); color: var(--accent); background: rgb(216 255 98 / 8%); }
+.property-list { display: grid; gap: 2px; margin: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 7px 0; }
+.property-list label { display: flex; align-items: center; gap: 9px; padding: 7px 2px; cursor: pointer; }
+.property-list input { accent-color: var(--accent-deep); }
+.property-list span { display: grid; gap: 2px; }
+.property-list strong { font-size: 11px; }
+.property-list small { color: var(--muted); font-size: 9px; }
+.stair-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 13px; }
+.stair-summary div { display: grid; gap: 3px; border: 1px solid #273137; border-radius: 7px; background: #0d1215; padding: 8px 6px; text-align: center; }
+.stair-summary strong { font-size: 12px; color: var(--accent); }
+.stair-summary span { color: var(--muted); font-size: 8px; }
 .toggle-row { display: flex; align-items: center; gap: 9px; margin-top: 13px; color: var(--muted); font-size: 11px; cursor: pointer; }
 .toggle-row input { accent-color: var(--accent-deep); }
 .action-stack { display: grid; gap: 8px; margin-top: 14px; }
