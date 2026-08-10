@@ -43,3 +43,9 @@ Small areas produce a warning. Validation returns structured diagnostics so futu
 ## Persistence
 
 The project document and Deck Boundary object have separate schema versions. JSON output is structured and portable. The initial workspace saves locally in the browser and supports explicit project export; external project storage can replace that adapter without changing the construction object.
+
+## Progressive lifecycle
+
+During creation, corners and segments remain transient sketch state. Closing a valid outline creates a reviewable Deck Boundary. Field confirmation establishes it as the authoritative project footprint. Later edits preserve the same object and its stable references while incrementing its revision.
+
+Authority does not mean immutability. It identifies the object that future construction relationships must reference.

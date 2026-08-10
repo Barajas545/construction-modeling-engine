@@ -1,11 +1,12 @@
-import { createProjectDocument, parseProject, serializeProject, upsertObject } from '../core/document/project-document.js';
+import { createProjectDocument, parseProject, serializeProject, setProjectWorkflowStage, upsertObject } from '../core/document/project-document.js';
+import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
 import { collectSnapTargets, resolveSnap } from '../core/geometry/snap-engine.js';
 import { nearestPointOnSegment } from '../core/geometry/vector.js';
 import { formatFeetInches, formatSquareFeet } from '../core/units/length.js';
 import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
-import { createDeckBoundary, insertVertex, removeVertex, setEdgeRole, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { createDeckBoundary, establishDeckBoundary, getBoundaryLifecycle, insertVertex, markBoundaryEdited, removeVertex, setEdgeRole, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'cme.project.v1';
@@ -28,6 +29,9 @@ let lastLength = null;
 let gridSetting = 'auto';
 let gridVisible = true;
 let viewportAnimation = 0;
+const activeTouches = new Map();
+let touchGesture = null;
+let pendingTouch = null;
 
 function loadProject() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -69,12 +73,14 @@ function screenToWorld(svg, event) {
 function render() {
   const current = boundary();
   const validation = current ? validateDeckBoundary(current) : null;
+  const progress = deriveModelProgress(documentModel);
+  const lifecycle = current ? getBoundaryLifecycle(current) : null;
   app.innerHTML = `
     <main class="app-shell">
       <header class="topbar">
-        <div class="brand"><div class="brand-mark">CME</div><div class="brand-copy"><div class="brand-name">Construction Modeling Engine</div><div class="brand-subtitle">Deck Boundary · Production workspace</div></div></div>
+        <div class="brand"><div class="brand-mark">CME</div><div class="brand-copy"><div class="brand-name">Construction Modeling Engine</div><div class="brand-subtitle">${progress.stage.label} · One evolving project</div></div></div>
         <div class="project-name"><span class="saved-dot"></span>${escapeHtml(documentModel.name)} <span style="color:var(--muted);font-weight:500">· Saved locally</span></div>
-        <div class="top-actions"><button class="button ghost" data-action="export">Export project</button><button class="button primary" data-action="finish" ${!current || !validation.valid ? 'disabled' : ''}>Boundary ready</button></div>
+        <div class="top-actions"><button class="button ghost" data-action="export">Export project</button><button class="button ${lifecycle?.phase === 'established' ? '' : 'primary'}" data-action="finish" ${!current || !validation.valid || lifecycle?.phase === 'established' ? 'disabled' : ''}>${lifecycle?.phase === 'established' ? 'Boundary established' : 'Establish boundary'}</button></div>
       </header>
       <section class="workspace-shell">
         <nav class="toolrail" aria-label="Modeling tools">
@@ -96,11 +102,17 @@ function render() {
           <div class="cursor-hud" aria-live="polite"><div class="hud-row"><span>Length</span><strong data-hud-length>—</strong></div><div class="hud-row"><span>Angle</span><strong data-hud-angle>—</strong></div><div class="hud-row snap"><span data-hud-snap-dot></span><strong data-hud-snap>Grid</strong></div><div class="hud-input" data-hud-input>Type a length</div></div>
           <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
         </section>
-        <aside class="inspector open">${renderInspector(current, validation)}${renderGridControls()}</aside>
+        <aside class="inspector open">${renderProgress(progress, current)}${renderInspector(current, validation)}${renderGridControls()}</aside>
       </section>
     </main>`;
   bindEvents();
   drawCanvas(app.querySelector('.model-canvas'), current, validation);
+}
+
+function renderProgress(progress, current) {
+  const established = current && getBoundaryLifecycle(current).phase === 'established';
+  const atFinalStage = progress.stage.id === progress.nextStage.id;
+  return `<section class="inspector-section progress-section"><div class="eyebrow">Progressive model</div><div class="progress-heading"><h2>${progress.stage.label}</h2><span class="level-badge">Level ${documentModel.workflow?.detailLevel ?? 1}</span></div><p class="section-copy">${progress.stage.description}</p><div class="maturity-track">${progress.milestones.map((milestone) => `<div class="maturity-step ${milestone.state}"><span></span><small>${milestone.label}</small></div>`).join('')}</div>${established && !atFinalStage ? `<button class="button progress-action" data-action="advance-stage">Continue to ${progress.nextStage.label.toLowerCase()}</button>` : ''}<div class="continuity-note">Same project · no redraw required</div></section>`;
 }
 
 function renderGridControls() {
@@ -113,9 +125,10 @@ function renderInspector(current, validation) {
     <section class="inspector-section"><div class="eyebrow">Fast start</div><h2>Rectangle deck</h2><p class="section-copy">Enter the outside dimensions of the walkable surface.</p><div class="field-grid"><div class="field"><label for="width">Width (ft)</label><input id="width" type="number" min="1" step="0.5" value="16"></div><div class="field"><label for="depth">Depth (ft)</label><input id="depth" type="number" min="1" step="0.5" value="12"></div></div><div class="action-stack"><button class="button primary" data-action="create-rectangle">Create deck boundary</button><button class="button" data-mode="draw">Draw a custom outline</button></div><div class="hint-card">Measure the outside edge of the finished walking surface. Structural framing will connect to this boundary in future tools.</div></section>`;
   const selectedEdge = selected.kind === 'edge' ? current.edges.find((edge) => edge.id === selected.id) : null;
   const selectedVertex = selected.kind === 'vertex' ? current.vertices.find((vertex) => vertex.id === selected.id) : null;
+  const lifecycle = getBoundaryLifecycle(current);
   const firstIssue = validation.issues[0];
   return `
-    <section class="inspector-section"><div class="eyebrow">Deck Boundary</div><h2>${escapeHtml(current.name)}</h2><p class="section-copy">The authoritative walkable surface for this project.</p><div class="metric-grid"><div class="metric"><div class="metric-label">Surface area</div><div class="metric-value">${formatSquareFeet(current.computed.areaSquareInches)}</div></div><div class="metric"><div class="metric-label">Perimeter</div><div class="metric-value">${formatFeetInches(current.computed.perimeterInches)}</div></div><div class="metric"><div class="metric-label">Corners</div><div class="metric-value">${current.vertices.length}</div></div><div class="metric"><div class="metric-label">House edges</div><div class="metric-value">${current.edges.filter((edge) => edge.role === 'house').length}</div></div></div><div class="validation ${validation.valid ? '' : 'error'}"><span class="validation-dot"></span><span>${validation.valid ? 'Boundary is closed and construction-ready.' : escapeHtml(firstIssue?.message ?? 'Boundary needs attention.')}</span></div></section>
+    <section class="inspector-section"><div class="object-status"><div><div class="eyebrow">Deck Boundary</div><h2>${escapeHtml(current.name)}</h2></div><span class="object-badge ${lifecycle.phase}">${lifecycle.phase === 'established' ? 'Authoritative' : 'Review'}</span></div><p class="section-copy">${lifecycle.phase === 'established' ? 'The authoritative walkable surface. Continue refining it as project detail grows.' : 'A completed sketch awaiting field confirmation before it becomes authoritative.'}</p><div class="metric-grid"><div class="metric"><div class="metric-label">Surface area</div><div class="metric-value">${formatSquareFeet(current.computed.areaSquareInches)}</div></div><div class="metric"><div class="metric-label">Perimeter</div><div class="metric-value">${formatFeetInches(current.computed.perimeterInches)}</div></div><div class="metric"><div class="metric-label">Corners</div><div class="metric-value">${current.vertices.length}</div></div><div class="metric"><div class="metric-label">Revision</div><div class="metric-value">${lifecycle.revision}</div></div></div><div class="validation ${validation.valid ? '' : 'error'}"><span class="validation-dot"></span><span>${validation.valid ? lifecycle.phase === 'established' ? 'Construction object is valid and remains fully editable.' : 'Sketch is valid. Establish it when field measurements are confirmed.' : escapeHtml(firstIssue?.message ?? 'Boundary needs attention.')}</span></div></section>
     ${selectedEdge ? `<section class="inspector-section"><div class="eyebrow">Selected edge</div><h2>Construction relationship</h2><p class="section-copy">Mark how future objects should connect to this edge.</p><div class="field-grid"><div class="field full"><label for="edge-role">Edge role</label><select id="edge-role"><option value="open" ${selectedEdge.role === 'open' ? 'selected' : ''}>Unassigned</option><option value="house" ${selectedEdge.role === 'house' ? 'selected' : ''}>House attachment</option><option value="free-edge" ${selectedEdge.role === 'free-edge' ? 'selected' : ''}>Open deck edge</option></select></div></div><div class="hint-card">This relationship is stored on a stable edge ID so future railing, fascia, and house-attachment tools can reference it.</div></section>` : ''}
     ${selectedVertex ? `<section class="inspector-section"><div class="eyebrow">Selected corner</div><h2>Corner position</h2><p class="section-copy">Drag this corner in the workspace. Movement snaps to ½-inch increments and nearby axes.</p><div class="action-stack"><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Remove corner</button></div></section>` : ''}
     <section class="inspector-section"><div class="eyebrow">Project model</div><h2>Ready for future objects</h2><p class="section-copy">Edges and corners keep stable identities for house attachments, stairs, railings, fascia, framing, and takeoff.</p><div class="action-stack"><button class="button" data-action="new-boundary">Start over</button></div></section>`;
@@ -150,8 +163,10 @@ function renderBoundarySvg(svg, current, validation) {
     addDimension(svg, start, end);
   });
   const markerSize = Math.max(2.8, viewport.width / 150);
+  const hitSize = viewport.width / Math.max(svg.clientWidth || 1000, 1) * 34;
   current.vertices.forEach((vertex) => {
-    svg.append(svgElement('rect', { x: vertex.x - markerSize / 2, y: vertex.y - markerSize / 2, width: markerSize, height: markerSize, rx: markerSize * .12, class: `vertex ${selected.kind === 'vertex' && selected.id === vertex.id ? 'selected' : ''}`, transform: `rotate(45 ${vertex.x} ${vertex.y})`, 'data-vertex-id': vertex.id }));
+    svg.append(svgElement('rect', { x: vertex.x - hitSize / 2, y: vertex.y - hitSize / 2, width: hitSize, height: hitSize, class: 'vertex-hit', 'data-vertex-id': vertex.id }));
+    svg.append(svgElement('rect', { x: vertex.x - markerSize / 2, y: vertex.y - markerSize / 2, width: markerSize, height: markerSize, rx: markerSize * .12, class: `vertex ${selected.kind === 'vertex' && selected.id === vertex.id ? 'selected' : ''}`, transform: `rotate(45 ${vertex.x} ${vertex.y})` }));
   });
 }
 
@@ -188,7 +203,7 @@ function bindEvents() {
   app.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
   app.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button.dataset.action)));
   const role = app.querySelector('#edge-role');
-  if (role) role.addEventListener('change', () => commitBoundary(setEdgeRole(boundary(), selected.id, role.value), 'Set edge relationship'));
+  if (role) role.addEventListener('change', () => commitBoundary(markBoundaryEdited(setEdgeRole(boundary(), selected.id, role.value)), 'Set edge relationship'));
   const gridSpacing = app.querySelector('#grid-spacing');
   if (gridSpacing) gridSpacing.addEventListener('change', () => { gridSetting = gridSpacing.value; render(); });
   const gridVisibility = app.querySelector('#grid-visible');
@@ -196,8 +211,8 @@ function bindEvents() {
   const svg = app.querySelector('.model-canvas');
   svg.addEventListener('pointerdown', (event) => canvasPointerDown(svg, event));
   svg.addEventListener('pointermove', (event) => canvasPointerMove(svg, event));
-  svg.addEventListener('pointerup', finishPointerGesture);
-  svg.addEventListener('pointercancel', finishPointerGesture);
+  svg.addEventListener('pointerup', (event) => finishPointerGesture(svg, event));
+  svg.addEventListener('pointercancel', (event) => finishPointerGesture(svg, event));
   svg.addEventListener('wheel', (event) => zoomAtPointer(svg, event), { passive: false });
   svg.addEventListener('contextmenu', (event) => event.preventDefault());
   svg.addEventListener('dblclick', (event) => edgeDoubleClick(svg, event));
@@ -212,6 +227,27 @@ function setMode(nextMode) {
 }
 
 function canvasPointerDown(svg, event) {
+  const vertexId = event.target.dataset.vertexId;
+  const edgeId = event.target.dataset.edgeId;
+  if (event.pointerType === 'touch' && !(mode === 'select' && (vertexId || edgeId))) {
+    event.preventDefault();
+    activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    svg.setPointerCapture(event.pointerId);
+    if (activeTouches.size === 2) {
+      pendingTouch = null;
+      panGesture = null;
+      const [first, second] = [...activeTouches.values()];
+      const center = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+      touchGesture = { viewport: { ...viewport }, center, worldAnchor: screenToWorld(svg, { clientX: center.x, clientY: center.y }), distance: Math.hypot(second.x - first.x, second.y - first.y) };
+      return;
+    }
+    if (mode === 'draw') pendingTouch = { pointerId: event.pointerId, x: event.clientX, y: event.clientY, startX: event.clientX, startY: event.clientY, moved: false };
+    else {
+      panGesture = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, viewport: { ...viewport }, touch: true };
+      svg.classList.add('panning');
+    }
+    return;
+  }
   if (event.button === 2) {
     event.preventDefault();
     panGesture = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, viewport: { ...viewport } };
@@ -227,8 +263,6 @@ function canvasPointerDown(svg, event) {
     lastMiddleClick = now;
     return;
   }
-  const vertexId = event.target.dataset.vertexId;
-  const edgeId = event.target.dataset.edgeId;
   if (mode === 'select' && vertexId) {
     selected = { kind: 'vertex', id: vertexId };
     draggingVertexId = vertexId;
@@ -243,7 +277,10 @@ function canvasPointerDown(svg, event) {
     return;
   }
   if (mode !== 'draw') { selected = { kind: null, id: null }; render(); return; }
-  const raw = screenToWorld(svg, event);
+  placeDraftPoint(screenToWorld(svg, event));
+}
+
+function placeDraftPoint(raw) {
   const snapped = snapForPointer(raw, draft[draft.length - 1]);
   if (draft.length >= 3 && Math.hypot(snapped.point.x - draft[0].x, snapped.point.y - draft[0].y) < 5) { completeDraft(); return; }
   draft.push(snapped.point);
@@ -253,6 +290,26 @@ function canvasPointerDown(svg, event) {
 }
 
 function canvasPointerMove(svg, event) {
+  if (event.pointerType === 'touch' && activeTouches.has(event.pointerId)) {
+    activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
+    if (pendingTouch?.pointerId === event.pointerId) {
+      pendingTouch.x = event.clientX;
+      pendingTouch.y = event.clientY;
+      pendingTouch.moved ||= Math.hypot(event.clientX - pendingTouch.startX, event.clientY - pendingTouch.startY) > 8;
+    }
+    if (touchGesture && activeTouches.size >= 2) {
+      const [first, second] = [...activeTouches.values()];
+      const center = { x: (first.x + second.x) / 2, y: (first.y + second.y) / 2 };
+      const currentDistance = Math.max(1, Math.hypot(second.x - first.x, second.y - first.y));
+      const zoomed = zoomViewport(touchGesture.viewport, touchGesture.worldAnchor, touchGesture.distance / currentDistance);
+      viewport = panViewport(zoomed, {
+        x: -(center.x - touchGesture.center.x) * zoomed.width / svg.clientWidth,
+        y: -(center.y - touchGesture.center.y) * zoomed.height / svg.clientHeight,
+      });
+      drawCanvasRefresh();
+      return;
+    }
+  }
   if (panGesture?.pointerId === event.pointerId) {
     const dx = -(event.clientX - panGesture.startX) * panGesture.viewport.width / svg.clientWidth;
     const dy = -(event.clientY - panGesture.startY) * panGesture.viewport.height / svg.clientHeight;
@@ -289,13 +346,22 @@ function drawCanvasRefresh() {
   drawCanvas(svg, current, current ? validateDeckBoundary(current) : null);
 }
 
-function finishPointerGesture() {
+function finishPointerGesture(svg, event) {
+  if (event.pointerType === 'touch') {
+    const shouldPlace = pendingTouch?.pointerId === event.pointerId && !pendingTouch.moved && !touchGesture;
+    const placement = pendingTouch ? { clientX: pendingTouch.x, clientY: pendingTouch.y } : null;
+    activeTouches.delete(event.pointerId);
+    if (pendingTouch?.pointerId === event.pointerId) pendingTouch = null;
+    if (activeTouches.size < 2) touchGesture = null;
+    if (shouldPlace && placement) placeDraftPoint(screenToWorld(svg, placement));
+  }
   if (panGesture) {
     panGesture = null;
     app.querySelector('.model-canvas')?.classList.remove('panning');
   }
   if (draggingVertexId && dragStartDocument && dragStartDocument !== documentModel) {
-    const finalDocument = documentModel;
+    const editedBoundary = markBoundaryEdited(boundary());
+    const finalDocument = upsertObject(documentModel, editedBoundary);
     documentModel = dragStartDocument;
     commit(finalDocument, 'Move boundary corner');
   }
@@ -353,7 +419,7 @@ function edgeDoubleClick(svg, event) {
   const edgeIndex = current.edges.findIndex((edge) => edge.id === edgeId);
   const raw = screenToWorld(svg, event);
   const projected = nearestPointOnSegment(raw, current.vertices[edgeIndex], current.vertices[(edgeIndex + 1) % current.vertices.length]);
-  commitBoundary(insertVertex(current, edgeId, projected.point), 'Add boundary corner');
+  commitBoundary(markBoundaryEdited(insertVertex(current, edgeId, projected.point)), 'Add boundary corner');
   message = 'Corner added';
 }
 
@@ -383,13 +449,20 @@ function handleAction(action) {
   if (action === 'complete-draft') completeDraft();
   if (action === 'undo') { documentModel = history.undo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Undid last change'; render(); }
   if (action === 'redo') { documentModel = history.redo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Redid change'; render(); }
-  if (action === 'delete-vertex' && selected.kind === 'vertex') { commitBoundary(removeVertex(boundary(), selected.id), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }
+  if (action === 'delete-vertex' && selected.kind === 'vertex') { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }
   if (action === 'new-boundary') {
     const next = { ...documentModel, objects: documentModel.objects.filter((object) => object.type !== 'deck-boundary') };
     commit(next, 'Remove deck boundary'); selected = { kind: null, id: null }; mode = 'select'; message = 'Ready for a new boundary';
   }
   if (action === 'export') exportProject();
-  if (action === 'finish') { message = 'Boundary is construction-ready'; render(); }
+  if (action === 'finish' && boundary()) { message = 'Deck Boundary is now the authoritative project footprint'; commitBoundary(establishDeckBoundary(boundary()), 'Establish deck boundary'); }
+  if (action === 'advance-stage') {
+    const progress = deriveModelProgress(documentModel);
+    if (progress.nextStage.id !== progress.stage.id) {
+      message = `Project advanced to ${progress.nextStage.label}`;
+      commit(setProjectWorkflowStage(documentModel, progress.nextStage.id), `Advance project to ${progress.nextStage.label}`);
+    }
+  }
   if (action === 'fit-project') fitProject();
   if (action === 'toggle-inspector') app.querySelector('.inspector')?.classList.toggle('open');
 }

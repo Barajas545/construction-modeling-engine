@@ -5,6 +5,7 @@
  */
 
 export * from './core/document/project-document.js';
+export * from './core/construction-objects/progressive-model.js';
 export * from './core/geometry/vector.js';
 export * from './core/geometry/snap-engine.js';
 export * from './core/units/length.js';

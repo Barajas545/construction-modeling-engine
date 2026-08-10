@@ -31,6 +31,13 @@ export function createDeckBoundary(vertices, options = {}) {
       metadata: {},
     })),
     metadata: { tags: [], ...(options.metadata ?? {}) },
+    lifecycle: {
+      phase: options.lifecycle?.phase ?? 'review',
+      revision: options.lifecycle?.revision ?? 1,
+      authoritative: options.lifecycle?.authoritative ?? false,
+      lastReviewedAt: options.lifecycle?.lastReviewedAt ?? null,
+      lastEditedAt: options.lifecycle?.lastEditedAt ?? null,
+    },
   };
   return withComputedProperties(boundary);
 }
@@ -52,6 +59,35 @@ export function updateVertex(boundary, vertexId, position) {
       ? { ...vertex, x: Number(position.x), y: Number(position.y) }
       : vertex),
   });
+}
+
+export function establishDeckBoundary(boundary, now = new Date().toISOString()) {
+  assertDeckBoundary(boundary);
+  return {
+    ...boundary,
+    lifecycle: {
+      ...boundary.lifecycle,
+      phase: 'established',
+      authoritative: true,
+      lastReviewedAt: now,
+    },
+  };
+}
+
+export function markBoundaryEdited(boundary, now = new Date().toISOString()) {
+  const lifecycle = boundary.lifecycle ?? { phase: 'established', authoritative: true, revision: 1 };
+  return {
+    ...boundary,
+    lifecycle: {
+      ...lifecycle,
+      revision: (lifecycle.revision ?? 1) + 1,
+      lastEditedAt: now,
+    },
+  };
+}
+
+export function getBoundaryLifecycle(boundary) {
+  return boundary.lifecycle ?? { phase: 'established', authoritative: true, revision: 1, lastReviewedAt: null, lastEditedAt: null };
 }
 
 export function insertVertex(boundary, edgeId, position, idFactory = defaultId) {
