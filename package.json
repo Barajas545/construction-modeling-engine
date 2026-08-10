@@ -1,8 +1,9 @@
 {
   "name": "cme",
+  "displayName": "Construction Modeling Engine (CME)",
   "version": "0.1.0",
   "private": true,
-  "description": "Independent construction modeling engine for DCR workflows.",
+  "description": "Construction Modeling Engine (CME), DCR's independent platform for modeling construction projects.",
   "scripts": {
     "test": "node --test"
   }
