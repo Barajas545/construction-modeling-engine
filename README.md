@@ -8,7 +8,11 @@ CME represents construction intent as structured, serializable project data. It 
 
 ## Current phase
 
-CME is in repository initialization. This phase establishes stable boundaries, documentation, validation projects, and extension points. It intentionally contains no construction logic. The first planned construction object is **Deck Boundary**.
+CME is in active construction-object development. **Deck Boundary**, the first production construction object, provides a structured walkable-surface model, validation, editing workflow, project persistence, and a professional modeling workspace.
+
+## Run the workspace
+
+Use `npm start`, then open `http://localhost:4173`. The workspace stores the active project locally in the browser and can export a portable `.cme.json` project file.
 
 ## Repository philosophy
 
@@ -52,12 +56,13 @@ Unapproved ideas remain isolated in `playground/`.
 
 ## High-level roadmap
 
-1. Establish the repository and architectural foundation.
-2. Define and implement Deck Boundary.
-3. Add the initial intelligent construction objects listed in `src/tools/`.
-4. Expand geometry, validation, serialization, rendering, command, and history services.
-5. Validate increasingly complex deck projects through the official example suite.
-6. Define a stable integration boundary for future use by DCR Sales Hub.
+1. Establish the repository and architectural foundation. *(Complete)*
+2. Define and implement Deck Boundary. *(Initial production version complete)*
+3. Validate and refine Deck Boundary with Product Lab examples.
+4. Add the next approved intelligent construction object listed in `src/tools/`.
+5. Expand geometry, validation, serialization, rendering, command, and history services.
+6. Validate increasingly complex deck projects through the official example suite.
+7. Define a stable integration boundary for future use by DCR Sales Hub.
 
 ## Repository map
 
