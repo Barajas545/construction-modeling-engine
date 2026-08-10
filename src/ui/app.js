@@ -1,7 +1,10 @@
 import { createProjectDocument, parseProject, serializeProject, upsertObject } from '../core/document/project-document.js';
-import { nearestPointOnSegment, snapPoint } from '../core/geometry/vector.js';
+import { collectSnapTargets, resolveSnap } from '../core/geometry/snap-engine.js';
+import { nearestPointOnSegment } from '../core/geometry/vector.js';
 import { formatFeetInches, formatSquareFeet } from '../core/units/length.js';
+import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
+import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { createDeckBoundary, insertVertex, removeVertex, setEdgeRole, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -16,6 +19,15 @@ let draggingVertexId = null;
 let dragStartDocument = null;
 let selected = { kind: null, id: null };
 let message = 'Ready';
+let viewport = createViewport();
+let panGesture = null;
+let lastMiddleClick = 0;
+let snapState = { type: 'grid', label: 'Grid', guides: [] };
+let numericBuffer = '';
+let lastLength = null;
+let gridSetting = 'auto';
+let gridVisible = true;
+let viewportAnimation = 0;
 
 function loadProject() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -80,14 +92,19 @@ function render() {
             <button class="button ${mode === 'draw' ? 'primary' : 'ghost'}" data-mode="draw">Draw outline</button>
             ${draft.length >= 3 ? '<button class="button primary" data-action="complete-draft">Close boundary</button>' : ''}
           </div>
-          <svg class="model-canvas ${mode === 'draw' ? 'drawing' : ''}" viewBox="-30 -25 360 250" aria-label="Deck boundary modeling workspace"></svg>
-          <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>½″ grid</strong> · Imperial · ${mode === 'draw' ? 'Click corners · Enter to close · Esc to cancel' : 'Drag corners · Double-click an edge to add a corner'}</div></div>
+          <svg class="model-canvas ${mode === 'draw' ? 'drawing' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
+          <div class="cursor-hud" aria-live="polite"><div class="hud-row"><span>Length</span><strong data-hud-length>—</strong></div><div class="hud-row"><span>Angle</span><strong data-hud-angle>—</strong></div><div class="hud-row snap"><span data-hud-snap-dot></span><strong data-hud-snap>Grid</strong></div><div class="hud-input" data-hud-input>Type a length</div></div>
+          <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
         </section>
-        <aside class="inspector open">${renderInspector(current, validation)}</aside>
+        <aside class="inspector open">${renderInspector(current, validation)}${renderGridControls()}</aside>
       </section>
     </main>`;
   bindEvents();
   drawCanvas(app.querySelector('.model-canvas'), current, validation);
+}
+
+function renderGridControls() {
+  return `<section class="inspector-section"><div class="eyebrow">Workspace</div><h2>Construction grid</h2><p class="section-copy">Grid density adapts as you navigate. Choose a fixed field increment when needed.</p><div class="field-grid"><div class="field full"><label for="grid-spacing">Snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><label class="toggle-row"><input id="grid-visible" type="checkbox" ${gridVisible ? 'checked' : ''}><span>Show construction grid</span></label><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
 }
 
 function renderInspector(current, validation) {
@@ -105,14 +122,17 @@ function renderInspector(current, validation) {
 }
 
 function drawCanvas(svg, current, validation) {
+  svg.setAttribute('viewBox', `${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}`);
+  const visibleGrid = gridSetting === 'auto' ? adaptiveGridSpacing(viewport.width, svg.clientWidth || 1000) : Number(gridSetting);
+  const majorGrid = visibleGrid * 4;
   const defs = svgElement('defs');
-  const minor = svgElement('pattern', { id: 'minorGrid', width: '6', height: '6', patternUnits: 'userSpaceOnUse' });
-  minor.append(svgElement('path', { d: 'M 6 0 L 0 0 0 6', class: 'grid-minor', fill: 'none' }));
-  const major = svgElement('pattern', { id: 'majorGrid', width: '24', height: '24', patternUnits: 'userSpaceOnUse' });
-  major.append(svgElement('rect', { width: '24', height: '24', fill: 'url(#minorGrid)' }), svgElement('path', { d: 'M 24 0 L 0 0 0 24', class: 'grid-major', fill: 'none' }));
+  const minor = svgElement('pattern', { id: 'minorGrid', width: visibleGrid, height: visibleGrid, patternUnits: 'userSpaceOnUse' });
+  minor.append(svgElement('path', { d: `M ${visibleGrid} 0 L 0 0 0 ${visibleGrid}`, class: 'grid-minor', fill: 'none' }));
+  const major = svgElement('pattern', { id: 'majorGrid', width: majorGrid, height: majorGrid, patternUnits: 'userSpaceOnUse' });
+  major.append(svgElement('rect', { width: majorGrid, height: majorGrid, fill: 'url(#minorGrid)' }), svgElement('path', { d: `M ${majorGrid} 0 L 0 0 0 ${majorGrid}`, class: 'grid-major', fill: 'none' }));
   defs.append(minor, major);
-  svg.append(defs, svgElement('rect', { x: '-30', y: '-25', width: '360', height: '250', fill: 'url(#majorGrid)' }));
-  svg.append(svgElement('line', { x1: '-30', y1: '0', x2: '330', y2: '0', class: 'axis-line' }), svgElement('line', { x1: '0', y1: '-25', x2: '0', y2: '225', class: 'axis-line' }));
+  svg.append(defs, svgElement('rect', { x: viewport.x, y: viewport.y, width: viewport.width, height: viewport.height, fill: gridVisible ? 'url(#majorGrid)' : '#0d1114' }));
+  svg.append(svgElement('line', { x1: viewport.x, y1: '0', x2: viewport.x + viewport.width, y2: '0', class: 'axis-line' }), svgElement('line', { x1: '0', y1: viewport.y, x2: '0', y2: viewport.y + viewport.height, class: 'axis-line' }));
   if (current) renderBoundarySvg(svg, current, validation);
   if (draft.length) renderDraft(svg);
 }
@@ -129,8 +149,9 @@ function renderBoundarySvg(svg, current, validation) {
     svg.append(hit);
     addDimension(svg, start, end);
   });
+  const markerSize = Math.max(2.8, viewport.width / 150);
   current.vertices.forEach((vertex) => {
-    svg.append(svgElement('circle', { cx: vertex.x, cy: vertex.y, r: '2.7', class: `vertex ${selected.kind === 'vertex' && selected.id === vertex.id ? 'selected' : ''}`, 'data-vertex-id': vertex.id }));
+    svg.append(svgElement('rect', { x: vertex.x - markerSize / 2, y: vertex.y - markerSize / 2, width: markerSize, height: markerSize, rx: markerSize * .12, class: `vertex ${selected.kind === 'vertex' && selected.id === vertex.id ? 'selected' : ''}`, transform: `rotate(45 ${vertex.x} ${vertex.y})`, 'data-vertex-id': vertex.id }));
   });
 }
 
@@ -154,11 +175,12 @@ function addDimension(svg, start, end) {
 function renderDraft(svg) {
   const points = [...draft, ...(pointerWorld ? [pointerWorld] : [])];
   svg.append(svgElement('polyline', { points: points.map((entry) => `${entry.x},${entry.y}`).join(' '), fill: 'none', class: 'preview-line' }));
-  draft.forEach((vertex, index) => svg.append(svgElement('circle', { cx: vertex.x, cy: vertex.y, r: index === 0 ? 3.4 : 2.5, class: `vertex ${index === 0 ? 'start' : ''}`, 'data-draft-index': index })));
+  const markerSize = Math.max(2.8, viewport.width / 150);
+  draft.forEach((vertex, index) => svg.append(svgElement('rect', { x: vertex.x - markerSize / 2, y: vertex.y - markerSize / 2, width: markerSize, height: markerSize, class: `vertex ${index === 0 ? 'start' : ''}`, transform: `rotate(45 ${vertex.x} ${vertex.y})`, 'data-draft-index': index })));
   if (pointerWorld && draft.length) {
     const anchor = draft[draft.length - 1];
-    if (Math.abs(pointerWorld.x - anchor.x) < .01) svg.append(svgElement('line', { x1: pointerWorld.x, y1: '-25', x2: pointerWorld.x, y2: '225', class: 'guide-line' }));
-    if (Math.abs(pointerWorld.y - anchor.y) < .01) svg.append(svgElement('line', { x1: '-30', y1: pointerWorld.y, x2: '330', y2: pointerWorld.y, class: 'guide-line' }));
+    if (snapState.guides.includes('vertical')) svg.append(svgElement('line', { x1: pointerWorld.x, y1: viewport.y, x2: pointerWorld.x, y2: viewport.y + viewport.height, class: 'guide-line' }));
+    if (snapState.guides.includes('horizontal')) svg.append(svgElement('line', { x1: viewport.x, y1: pointerWorld.y, x2: viewport.x + viewport.width, y2: pointerWorld.y, class: 'guide-line' }));
   }
 }
 
@@ -167,22 +189,44 @@ function bindEvents() {
   app.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button.dataset.action)));
   const role = app.querySelector('#edge-role');
   if (role) role.addEventListener('change', () => commitBoundary(setEdgeRole(boundary(), selected.id, role.value), 'Set edge relationship'));
+  const gridSpacing = app.querySelector('#grid-spacing');
+  if (gridSpacing) gridSpacing.addEventListener('change', () => { gridSetting = gridSpacing.value; render(); });
+  const gridVisibility = app.querySelector('#grid-visible');
+  if (gridVisibility) gridVisibility.addEventListener('change', () => { gridVisible = gridVisibility.checked; render(); });
   const svg = app.querySelector('.model-canvas');
   svg.addEventListener('pointerdown', (event) => canvasPointerDown(svg, event));
   svg.addEventListener('pointermove', (event) => canvasPointerMove(svg, event));
-  svg.addEventListener('pointerup', finishVertexDrag);
-  svg.addEventListener('pointercancel', finishVertexDrag);
+  svg.addEventListener('pointerup', finishPointerGesture);
+  svg.addEventListener('pointercancel', finishPointerGesture);
+  svg.addEventListener('wheel', (event) => zoomAtPointer(svg, event), { passive: false });
+  svg.addEventListener('contextmenu', (event) => event.preventDefault());
   svg.addEventListener('dblclick', (event) => edgeDoubleClick(svg, event));
 }
 
 function setMode(nextMode) {
   mode = nextMode;
+  numericBuffer = '';
   if (mode !== 'draw') { draft = []; pointerWorld = null; message = 'Ready'; }
   else message = 'Click the first corner of the deck';
   render();
 }
 
 function canvasPointerDown(svg, event) {
+  if (event.button === 2) {
+    event.preventDefault();
+    panGesture = { pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, viewport: { ...viewport } };
+    svg.setPointerCapture(event.pointerId);
+    svg.classList.add('panning');
+    hideHud();
+    return;
+  }
+  if (event.button === 1) {
+    event.preventDefault();
+    const now = performance.now();
+    if (now - lastMiddleClick < 350) fitProject(svg);
+    lastMiddleClick = now;
+    return;
+  }
   const vertexId = event.target.dataset.vertexId;
   const edgeId = event.target.dataset.edgeId;
   if (mode === 'select' && vertexId) {
@@ -200,28 +244,41 @@ function canvasPointerDown(svg, event) {
   }
   if (mode !== 'draw') { selected = { kind: null, id: null }; render(); return; }
   const raw = screenToWorld(svg, event);
-  const snapped = snapPoint(raw, draft[draft.length - 1], { grid: .5, axisThreshold: 2 });
+  const snapped = snapForPointer(raw, draft[draft.length - 1]);
   if (draft.length >= 3 && Math.hypot(snapped.point.x - draft[0].x, snapped.point.y - draft[0].y) < 5) { completeDraft(); return; }
   draft.push(snapped.point);
+  numericBuffer = '';
   message = draft.length < 3 ? 'Continue to the next corner' : 'Click the first corner or press Enter to close';
   render();
 }
 
 function canvasPointerMove(svg, event) {
+  if (panGesture?.pointerId === event.pointerId) {
+    const dx = -(event.clientX - panGesture.startX) * panGesture.viewport.width / svg.clientWidth;
+    const dy = -(event.clientY - panGesture.startY) * panGesture.viewport.height / svg.clientHeight;
+    viewport = panViewport(panGesture.viewport, { x: dx, y: dy });
+    drawCanvasRefresh();
+    return;
+  }
   const raw = screenToWorld(svg, event);
   if (draggingVertexId && boundary()) {
     const current = boundary();
     const index = current.vertices.findIndex((vertex) => vertex.id === draggingVertexId);
     const anchor = current.vertices[(index - 1 + current.vertices.length) % current.vertices.length];
-    const snapped = snapPoint(raw, anchor, { grid: .5, axisThreshold: 2 });
+    const adjacentIds = new Set([draggingVertexId, current.edges[index]?.id, current.edges[(index - 1 + current.edges.length) % current.edges.length]?.id]);
+    const snapped = snapForPointer(raw, anchor, [], adjacentIds);
     documentModel = upsertObject(documentModel, updateVertex(current, draggingVertexId, snapped.point));
     persist();
     drawCanvasRefresh();
     return;
   }
   if (mode === 'draw') {
-    pointerWorld = snapPoint(raw, draft[draft.length - 1], { grid: .5, axisThreshold: 2 }).point;
+    snapState = snapForPointer(raw, draft[draft.length - 1]);
+    pointerWorld = snapState.point;
     drawCanvasRefresh();
+    updateHud(event);
+  } else {
+    hideHud();
   }
 }
 
@@ -232,7 +289,11 @@ function drawCanvasRefresh() {
   drawCanvas(svg, current, current ? validateDeckBoundary(current) : null);
 }
 
-function finishVertexDrag() {
+function finishPointerGesture() {
+  if (panGesture) {
+    panGesture = null;
+    app.querySelector('.model-canvas')?.classList.remove('panning');
+  }
   if (draggingVertexId && dragStartDocument && dragStartDocument !== documentModel) {
     const finalDocument = documentModel;
     documentModel = dragStartDocument;
@@ -240,6 +301,49 @@ function finishVertexDrag() {
   }
   draggingVertexId = null;
   dragStartDocument = null;
+}
+
+function snapForPointer(raw, anchor, extraVertices = [], excludedIds = new Set()) {
+  const objects = boundary() ? [boundary()] : [];
+  const draftObject = { vertices: [...draft, ...extraVertices], edges: [] };
+  const tolerance = viewport.width / Math.max(app.querySelector('.model-canvas')?.clientWidth ?? 1000, 1) * 11;
+  return resolveSnap(raw, {
+    anchor,
+    tolerance,
+    grid: gridSetting === 'auto' ? .5 : Number(gridSetting),
+    targets: collectSnapTargets([...objects, draftObject]).filter((target) => !excludedIds.has(target.referenceId)),
+  });
+}
+
+function zoomAtPointer(svg, event) {
+  event.preventDefault();
+  const anchor = screenToWorld(svg, event);
+  const target = zoomViewport(viewport, anchor, Math.exp(event.deltaY * .0012));
+  animateViewport(target);
+  hideHud();
+}
+
+function animateViewport(target) {
+  const animationId = ++viewportAnimation;
+  const start = { ...viewport };
+  const startedAt = performance.now();
+  const duration = 130;
+  const frame = (now) => {
+    if (animationId !== viewportAnimation) return;
+    const progress = Math.min(1, (now - startedAt) / duration);
+    const eased = 1 - (1 - progress) ** 3;
+    viewport = Object.fromEntries(Object.keys(start).map((key) => [key, start[key] + (target[key] - start[key]) * eased]));
+    drawCanvasRefresh();
+    if (progress < 1) requestAnimationFrame(frame);
+  };
+  requestAnimationFrame(frame);
+}
+
+function fitProject(svg = app.querySelector('.model-canvas')) {
+  const points = [...(boundary()?.vertices ?? []), ...draft];
+  const aspect = (svg?.clientWidth || 1000) / (svg?.clientHeight || 700);
+  animateViewport(fitViewport(points, aspect));
+  message = points.length ? 'Project fitted to workspace' : 'Workspace reset';
 }
 
 function edgeDoubleClick(svg, event) {
@@ -261,6 +365,7 @@ function completeDraft() {
   commitBoundary(nextBoundary, 'Create deck boundary');
   draft = [];
   pointerWorld = null;
+  numericBuffer = '';
   mode = 'select';
   message = 'Deck boundary created';
   render();
@@ -285,6 +390,7 @@ function handleAction(action) {
   }
   if (action === 'export') exportProject();
   if (action === 'finish') { message = 'Boundary is construction-ready'; render(); }
+  if (action === 'fit-project') fitProject();
   if (action === 'toggle-inspector') app.querySelector('.inspector')?.classList.toggle('open');
 }
 
@@ -304,13 +410,88 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' })[character]);
 }
 
+function updateHud(event) {
+  const hud = app.querySelector('.cursor-hud');
+  if (!hud || mode !== 'draw' || !draft.length || !pointerWorld) { hideHud(); return; }
+  const panel = app.querySelector('.canvas-panel').getBoundingClientRect();
+  hud.style.left = `${Math.min(panel.width - 180, event.clientX - panel.left + 18)}px`;
+  hud.style.top = `${Math.min(panel.height - 120, event.clientY - panel.top + 18)}px`;
+  hud.classList.add('visible');
+  const anchor = draft[draft.length - 1];
+  const dx = pointerWorld.x - anchor.x;
+  const dy = pointerWorld.y - anchor.y;
+  const angle = Math.atan2(dy, dx) * 180 / Math.PI;
+  hud.querySelector('[data-hud-length]').textContent = formatFeetInches(Math.hypot(dx, dy));
+  hud.querySelector('[data-hud-angle]').textContent = `${Math.round(angle)}°`;
+  hud.querySelector('[data-hud-snap]').textContent = snapState.label;
+  const input = hud.querySelector('[data-hud-input]');
+  input.textContent = numericBuffer || 'Type a length · Enter';
+  input.classList.toggle('active', Boolean(numericBuffer));
+}
+
+function hideHud() {
+  app.querySelector('.cursor-hud')?.classList.remove('visible');
+}
+
+function acceptNumericLength() {
+  if (!draft.length || !numericBuffer) return false;
+  const length = parseConstructionLength(numericBuffer);
+  if (!length || length <= 0) { message = 'Use a length such as 12\', 144 in, or 3658 mm'; render(); return true; }
+  const anchor = draft[draft.length - 1];
+  const dx = (pointerWorld?.x ?? anchor.x + 1) - anchor.x;
+  const dy = (pointerWorld?.y ?? anchor.y) - anchor.y;
+  const magnitude = Math.hypot(dx, dy) || 1;
+  const exactPoint = { x: anchor.x + dx / magnitude * length, y: anchor.y + dy / magnitude * length };
+  draft.push(exactPoint);
+  pointerWorld = exactPoint;
+  lastLength = length;
+  numericBuffer = '';
+  message = `${formatFeetInches(length)} segment placed · continue drawing`;
+  render();
+  return true;
+}
+
+function repeatLastSegment() {
+  if (!lastLength || !draft.length) return;
+  const anchor = draft.at(-1);
+  const previous = draft.at(-2);
+  const dx = previous ? anchor.x - previous.x : 1;
+  const dy = previous ? anchor.y - previous.y : 0;
+  const magnitude = Math.hypot(dx, dy) || 1;
+  draft.push({ x: anchor.x + dx / magnitude * lastLength, y: anchor.y + dy / magnitude * lastLength });
+  message = `${formatFeetInches(lastLength)} segment repeated`;
+  render();
+}
+
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   if (modifier && event.key.toLowerCase() === 'z') { event.preventDefault(); handleAction(event.shiftKey ? 'redo' : 'undo'); }
   if (modifier && event.key.toLowerCase() === 'y') { event.preventDefault(); handleAction('redo'); }
-  if (event.key === 'Enter' && mode === 'draw') completeDraft();
-  if (event.key === 'Escape' && mode === 'draw') { draft = []; pointerWorld = null; mode = 'select'; message = 'Drawing canceled'; render(); }
+  if (mode === 'draw' && !modifier && /^[0-9a-z.'"\-]$/i.test(event.key)) {
+    if (event.key.toLowerCase() === 'r' && !numericBuffer) { event.preventDefault(); repeatLastSegment(); return; }
+    event.preventDefault(); numericBuffer += event.key; message = 'Enter an exact segment length'; updateHudFromKeyboard(); return;
+  }
+  if (mode === 'draw' && event.key === 'Backspace' && numericBuffer) { event.preventDefault(); numericBuffer = numericBuffer.slice(0, -1); updateHudFromKeyboard(); return; }
+  if (event.key === 'Enter' && mode === 'draw') { event.preventDefault(); if (!acceptNumericLength()) completeDraft(); }
+  if (event.key === ' ' && mode === 'draw') { event.preventDefault(); if (numericBuffer) { numericBuffer += ' '; updateHudFromKeyboard(); } else repeatLastSegment(); }
+  if (event.key === 'Tab' && mode === 'draw') { event.preventDefault(); message = numericBuffer ? 'Press Enter to accept length' : 'Type a dimension in feet, inches, millimeters, or meters'; updateHudFromKeyboard(); }
+  if (event.key === 'Escape' && mode === 'draw') {
+    event.preventDefault();
+    if (numericBuffer) numericBuffer = '';
+    else if (draft.length) draft.pop();
+    else mode = 'select';
+    pointerWorld = draft.at(-1) ?? null;
+    message = mode === 'draw' ? 'Last sketch step canceled' : 'Drawing canceled'; render();
+  }
   if ((event.key === 'Delete' || event.key === 'Backspace') && selected.kind === 'vertex') handleAction('delete-vertex');
 });
+
+function updateHudFromKeyboard() {
+  const hud = app.querySelector('.cursor-hud');
+  if (!hud) return;
+  const input = hud.querySelector('[data-hud-input]');
+  input.textContent = numericBuffer || 'Type a length · Enter';
+  input.classList.toggle('active', Boolean(numericBuffer));
+}
 
 render();
