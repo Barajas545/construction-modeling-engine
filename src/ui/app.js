@@ -8,7 +8,7 @@ import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, removeVertex, setEdgeLength, setEdgeRole, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
-import { attachStairToBoundary, calculateStairLayout, deriveStairTreads, validateStairPlacement } from '../tools/stairs/stair.js';
+import { attachStairToBoundary, deriveStairDragOptions, deriveStairTreads, validateStairPlacement } from '../tools/stairs/stair.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'cme.project.v1';
@@ -38,6 +38,7 @@ const activeTouches = new Map();
 let touchGesture = null;
 let pendingTouch = null;
 let stairDraft = null;
+let stairGesture = null;
 
 function loadProject() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -107,6 +108,7 @@ function render() {
           </div>
           <svg class="model-canvas ${mode === 'draw' ? 'drawing' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
           <div class="cursor-hud" aria-live="polite"><div class="hud-row"><span>Length</span><strong data-hud-length>—</strong></div><div class="hud-row"><span>Angle</span><strong data-hud-angle>—</strong></div><div class="hud-row snap"><span data-hud-snap-dot></span><strong data-hud-snap>Grid</strong></div><div class="hud-input" data-hud-input>Type a length</div></div>
+          <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span></div><small>Release to build · 7.5″ max rise · 11″ max tread</small></div>
           <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
         </section>
         <aside class="inspector open">${renderProgress(progress, current)}${renderInspector(current, validation)}${renderGridControls()}</aside>
@@ -145,7 +147,9 @@ function renderInspector(current, validation) {
 }
 
 function renderStairObjectInspector(stair) {
-  return `<section class="inspector-section stair-panel"><div class="object-status"><div><div class="eyebrow">Stair construction object</div><h2>${escapeHtml(stair.name)}</h2></div><span class="object-badge established">Attached</span></div><p class="section-copy">Generated from the authoritative Deck Boundary. Treads remain derived from the referenced opening.</p><div class="metric-grid"><div class="metric"><div class="metric-label">Clear width</div><div class="metric-value">${formatFeetInches(stair.dimensions.width)}</div></div><div class="metric"><div class="metric-label">Total rise</div><div class="metric-value">${formatFeetInches(stair.dimensions.totalRise)}</div></div><div class="metric"><div class="metric-label">Risers</div><div class="metric-value">${stair.dimensions.stepCount}</div></div><div class="metric"><div class="metric-label">Total run</div><div class="metric-value">${formatFeetInches(stair.dimensions.totalRun)}</div></div></div><div class="validation"><span class="validation-dot"></span><span>Stair anchors and generated edges are part of the project model.</span></div></section>`;
+  const riserCount = stair.dimensions.riserCount ?? stair.dimensions.stepCount;
+  const treadCount = stair.dimensions.treadCount ?? Math.max(1, riserCount - 1);
+  return `<section class="inspector-section stair-panel"><div class="object-status"><div><div class="eyebrow">Stair construction object</div><h2>${escapeHtml(stair.name)}</h2></div><span class="object-badge established">Attached</span></div><p class="section-copy">Generated from the authoritative Deck Boundary. The deck surface is the upper landing, so the final transition from the last tread counts as a riser.</p><div class="metric-grid"><div class="metric"><div class="metric-label">Total rise</div><div class="metric-value">${formatFeetInches(stair.dimensions.totalRise)}</div></div><div class="metric"><div class="metric-label">Total run</div><div class="metric-value">${formatFeetInches(stair.dimensions.totalRun)}</div></div><div class="metric"><div class="metric-label">Risers</div><div class="metric-value">${riserCount} × ${formatFeetInches(stair.dimensions.riserHeight)}</div></div><div class="metric"><div class="metric-label">Treads</div><div class="metric-value">${treadCount} × ${formatFeetInches(stair.dimensions.treadDepth)}</div></div></div><div class="validation"><span class="validation-dot"></span><span>Each riser is 7.5″ or less and each tread is 11″ or less.</span></div></section>`;
 }
 
 function renderEdgeInspector(current, edge) {
@@ -159,11 +163,7 @@ function renderEdgeInspector(current, edge) {
 }
 
 function renderStairInspector(current, edge) {
-  const settings = stairDraft;
-  const parsed = { width: parseConstructionLength(settings.width), totalRise: parseConstructionLength(settings.totalRise), treadDepth: parseConstructionLength(settings.treadDepth), targetRiserHeight: 7.5 };
-  const validation = validateStairPlacement(current, edge.id, parsed);
-  const layout = validation.valid ? calculateStairLayout(parsed.totalRise, 7.5, parsed.treadDepth) : null;
-  return `<section class="inspector-section stair-panel"><div class="eyebrow">Stair definition</div><h2>Define the staircase</h2><p class="section-copy">CME will generate the opening, run, and individual treads from this edge.</p><div class="field-grid"><div class="field"><label for="stair-width">Clear width</label><input id="stair-width" value="${escapeHtml(settings.width)}"></div><div class="field"><label for="stair-rise">Total rise</label><input id="stair-rise" value="${escapeHtml(settings.totalRise)}"></div><div class="field full"><label for="stair-tread">Target tread depth</label><input id="stair-tread" value="${escapeHtml(settings.treadDepth)}"></div></div>${layout ? `<div class="stair-summary"><div><strong>${layout.stepCount}</strong><span>risers</span></div><div><strong>${formatFeetInches(layout.riserHeight)}</strong><span>each rise</span></div><div><strong>${formatFeetInches(layout.totalRun)}</strong><span>total run</span></div></div>` : `<div class="validation error"><span class="validation-dot"></span><span>${escapeHtml(validation.issues[0] ?? 'Check stair dimensions.')}</span></div>`}<div class="action-stack"><button class="button primary" data-action="confirm-stair" ${validation.valid ? '' : 'disabled'}>Build staircase</button><button class="button" data-action="cancel-stair">Cancel</button></div><div class="hint-card">Planning geometry only. Final code compliance and structural design remain future validation layers.</div></section>`;
+  return `<section class="inspector-section stair-panel"><div class="eyebrow">Live stair placement</div><h2>Press and drag outward</h2><p class="section-copy">Start on this construction edge and pull away from the deck. Treads and risers will appear immediately; release when the displayed total rise matches the field measurement.</p><div class="stair-limit-list"><span><strong>7.5″</strong> maximum riser</span><span><strong>11″</strong> maximum tread</span><span><strong>Deck</strong> is the upper landing</span></div><div class="action-stack"><button class="button" data-action="cancel-stair">Cancel stair tool</button></div></section>`;
 }
 
 function drawCanvas(svg, current, validation) {
@@ -191,12 +191,8 @@ function renderStairGraphics(svg, current) {
 }
 
 function renderStairPreview(svg, current) {
-  if (!stairDraft || !selected.id) return;
-  const options = {
-    width: parseConstructionLength(stairDraft.width),
-    totalRise: parseConstructionLength(stairDraft.totalRise),
-    treadDepth: parseConstructionLength(stairDraft.treadDepth),
-  };
+  if (!stairDraft || !selected.id || !stairDraft.totalRise) return;
+  const options = { ...stairDraft };
   if (!validateStairPlacement(current, selected.id, options).valid) return;
   let count = 0;
   try {
@@ -311,10 +307,6 @@ function bindEvents() {
     message = `${key} property updated`;
     commitBoundary(markBoundaryEdited(updateEdgeProperties(boundary(), selected.id, patch)), 'Update edge construction properties');
   }));
-  [['#stair-width', 'width'], ['#stair-rise', 'totalRise'], ['#stair-tread', 'treadDepth']].forEach(([selector, key]) => {
-    const input = app.querySelector(selector);
-    if (input) input.addEventListener('change', () => { stairDraft[key] = input.value; render(); });
-  });
   const gridSpacing = app.querySelector('#grid-spacing');
   if (gridSpacing) gridSpacing.addEventListener('change', () => { gridSetting = gridSpacing.value; render(); });
   const gridVisibility = app.querySelector('#grid-visible');
@@ -332,10 +324,11 @@ function bindEvents() {
 function setMode(nextMode) {
   mode = nextMode;
   numericBuffer = '';
+  stairGesture = null;
   if (mode !== 'stair') stairDraft = null;
   if (mode !== 'draw') { draft = []; pointerWorld = null; message = 'Ready'; }
   if (mode === 'draw') message = 'Click the first corner of the deck';
-  if (mode === 'stair') message = 'Select the boundary edge where the staircase begins';
+  if (mode === 'stair') message = 'Press a boundary edge and drag outward to build stairs';
   render();
 }
 
@@ -394,10 +387,20 @@ function canvasPointerDown(svg, event) {
     return;
   }
   if (mode === 'stair' && edgeId) {
+    const current = boundary();
+    const edgeIndex = current.edges.findIndex((edge) => edge.id === edgeId);
+    const edgeLength = Math.hypot(
+      current.vertices[(edgeIndex + 1) % current.vertices.length].x - current.vertices[edgeIndex].x,
+      current.vertices[(edgeIndex + 1) % current.vertices.length].y - current.vertices[edgeIndex].y,
+    );
     selected = { kind: 'edge', id: edgeId };
-    stairDraft = { edgeId, width: '36 in', totalRise: '36 in', treadDepth: '10 in' };
-    message = 'Review the generated stair layout';
-    render();
+    stairGesture = { pointerId: event.pointerId, edgeId, width: Math.min(36, Math.max(24, edgeLength - 12)) };
+    stairDraft = { edgeId, width: stairGesture.width, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0, dragging: true };
+    message = 'Drag outward · watch TOTAL RISE · release to build';
+    svg.setPointerCapture(event.pointerId);
+    svg.classList.add('stairing');
+    updateStairLiveHud();
+    drawCanvasRefresh();
     return;
   }
   if (mode !== 'draw') { selected = { kind: null, id: null }; render(); return; }
@@ -442,6 +445,17 @@ function canvasPointerMove(svg, event) {
     return;
   }
   const raw = screenToWorld(svg, event);
+  if (stairGesture?.pointerId === event.pointerId) {
+    const options = deriveStairDragOptions(boundary(), stairGesture.edgeId, raw, stairGesture.width);
+    stairDraft = options
+      ? { edgeId: stairGesture.edgeId, ...options, dragging: true }
+      : { edgeId: stairGesture.edgeId, width: stairGesture.width, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0, dragging: true };
+    message = options ? `${formatFeetInches(options.totalRise)} total rise · release to build` : 'Drag outward from the deck edge';
+    drawCanvasRefresh();
+    updateStairLiveHud(event);
+    updateStatusMessage();
+    return;
+  }
   if (draggingEdgeId && edgeDragStart) {
     const original = edgeDragStart.boundary;
     const edgeIndex = original.edges.findIndex((edge) => edge.id === draggingEdgeId);
@@ -500,6 +514,32 @@ function finishPointerGesture(svg, event) {
   if (panGesture) {
     panGesture = null;
     app.querySelector('.model-canvas')?.classList.remove('panning');
+  }
+  if (stairGesture?.pointerId === event.pointerId) {
+    const options = stairDraft;
+    stairGesture = null;
+    app.querySelector('.model-canvas')?.classList.remove('stairing');
+    if (event.type === 'pointercancel' || !options?.totalRise || options.totalRun < 12) {
+      stairDraft = null;
+      message = event.type === 'pointercancel' ? 'Stair placement canceled' : 'Drag at least 12 inches outward to build stairs';
+      render();
+      return;
+    }
+    try {
+      const attached = attachStairToBoundary(boundary(), options.edgeId, options);
+      let next = upsertObject(documentModel, markBoundaryEdited(attached.boundary));
+      next = upsertObject(next, attached.stair);
+      selected = { kind: 'stair', id: attached.stair.id };
+      stairDraft = null;
+      mode = 'select';
+      message = `${attached.stair.dimensions.riserCount} risers · ${attached.stair.dimensions.treadCount} treads · staircase added`;
+      commit(next, 'Drag staircase from Deck Boundary');
+    } catch (error) {
+      stairDraft = null;
+      message = error.message;
+      render();
+    }
+    return;
   }
   if (draggingVertexId && dragStartDocument && dragStartDocument !== documentModel) {
     if (mergeCandidateId) {
@@ -668,22 +708,13 @@ function handleAction(action) {
     message = 'Corner inserted at the edge midpoint';
     commitBoundary(inserted, 'Insert boundary corner');
   }
-  if (action === 'start-stair' && selected.kind === 'edge') { mode = 'stair'; stairDraft = { edgeId: selected.id, width: '36 in', totalRise: '36 in', treadDepth: '10 in' }; message = 'Define the staircase from this construction edge'; render(); }
-  if (action === 'cancel-stair') { stairDraft = null; mode = 'select'; message = 'Stair placement canceled'; render(); }
-  if (action === 'confirm-stair' && stairDraft && selected.kind === 'edge') {
-    const options = { width: parseConstructionLength(stairDraft.width), totalRise: parseConstructionLength(stairDraft.totalRise), treadDepth: parseConstructionLength(stairDraft.treadDepth) };
-    try {
-      const attached = attachStairToBoundary(boundary(), selected.id, options);
-      let next = upsertObject(documentModel, markBoundaryEdited(attached.boundary));
-      next = upsertObject(next, attached.stair);
-      selected = { kind: 'stair', id: attached.stair.id };
-      stairDraft = null;
-      mode = 'select';
-      message = `${attached.stair.dimensions.stepCount}-riser staircase added to the project model`;
-      commit(next, 'Attach staircase to Deck Boundary');
-      fitProject();
-    } catch (error) { message = error.message; render(); }
+  if (action === 'start-stair' && selected.kind === 'edge') {
+    mode = 'stair';
+    stairDraft = { edgeId: selected.id, width: 36, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0 };
+    message = 'Press this edge and drag outward · release at the required total rise';
+    render();
   }
+  if (action === 'cancel-stair') { stairGesture = null; stairDraft = null; mode = 'select'; message = 'Stair placement canceled'; render(); }
   if (action === 'undo') { documentModel = history.undo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Undid last change'; render(); }
   if (action === 'redo') { documentModel = history.redo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Redid change'; render(); }
   if (action === 'delete-vertex' && selected.kind === 'vertex') { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }
@@ -741,6 +772,29 @@ function updateHud(event) {
 
 function hideHud() {
   app.querySelector('.cursor-hud')?.classList.remove('visible');
+}
+
+function updateStairLiveHud(event = null) {
+  const hud = app.querySelector('.stair-live-hud');
+  if (!hud) return;
+  hud.classList.toggle('visible', Boolean(stairGesture));
+  if (!stairGesture) return;
+  if (event) {
+    const panel = app.querySelector('.canvas-panel').getBoundingClientRect();
+    hud.style.left = `${Math.max(14, Math.min(panel.width - 230, event.clientX - panel.left + 22))}px`;
+    hud.style.top = `${Math.max(70, Math.min(panel.height - 190, event.clientY - panel.top - 72))}px`;
+  }
+  const options = stairDraft;
+  hud.querySelector('[data-stair-live-rise]').textContent = options?.totalRise ? formatFeetInches(options.totalRise) : '0″';
+  hud.querySelector('[data-stair-live-risers]').textContent = options?.riserCount || '—';
+  hud.querySelector('[data-stair-live-treads]').textContent = options?.treadCount || '—';
+  hud.querySelector('[data-stair-live-riser]').textContent = options?.riserHeight ? formatFeetInches(options.riserHeight) : '—';
+  hud.querySelector('[data-stair-live-tread]').textContent = options?.treadDepth ? formatFeetInches(options.treadDepth) : '—';
+}
+
+function updateStatusMessage() {
+  const status = app.querySelector('.status-pill');
+  if (status) status.textContent = message;
 }
 
 function acceptNumericLength() {

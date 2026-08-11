@@ -4,6 +4,8 @@ import { withComputedProperties } from '../deck-boundary/deck-boundary.js';
 
 export const STAIR_TYPE = 'stair';
 export const STAIR_SCHEMA_VERSION = 1;
+export const MAX_RISER_HEIGHT = 7.5;
+export const MAX_TREAD_DEPTH = 11;
 const defaultId = (prefix) => `${prefix}-${crypto.randomUUID()}`;
 
 function signedTwiceArea(vertices) {
@@ -13,9 +15,50 @@ function signedTwiceArea(vertices) {
   }, 0);
 }
 
-export function calculateStairLayout(totalRise, targetRiserHeight = 7.5, treadDepth = 10) {
-  const stepCount = Math.max(2, Math.ceil(totalRise / targetRiserHeight));
-  return { stepCount, riserHeight: totalRise / stepCount, treadDepth, totalRun: stepCount * treadDepth };
+export function calculateStairLayout(totalRise, targetRiserHeight = MAX_RISER_HEIGHT, treadDepth = 10) {
+  const limitedRiserHeight = Math.min(targetRiserHeight, MAX_RISER_HEIGHT);
+  const riserCount = Math.max(2, Math.ceil(totalRise / limitedRiserHeight));
+  const treadCount = riserCount - 1;
+  return {
+    stepCount: riserCount,
+    riserCount,
+    treadCount,
+    riserHeight: totalRise / riserCount,
+    treadDepth,
+    totalRun: treadCount * treadDepth,
+  };
+}
+
+export function calculateStairDragLayout(totalRun, riseToRunRatio = 0.9) {
+  const run = Math.max(0, Number(totalRun));
+  if (!Number.isFinite(run) || run < 6) return null;
+  const totalRise = Math.max(0.5, Math.round(run * riseToRunRatio * 2) / 2);
+  const riserCount = Math.max(2, Math.ceil(totalRise / MAX_RISER_HEIGHT), Math.ceil(run / MAX_TREAD_DEPTH) + 1);
+  const treadCount = riserCount - 1;
+  return {
+    stepCount: riserCount,
+    riserCount,
+    treadCount,
+    totalRise,
+    totalRun: run,
+    riserHeight: totalRise / riserCount,
+    treadDepth: run / treadCount,
+  };
+}
+
+export function deriveStairDragOptions(boundary, edgeId, pointer, width = 36) {
+  const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
+  if (edgeIndex < 0) return null;
+  const start = boundary.vertices[edgeIndex];
+  const end = boundary.vertices[(edgeIndex + 1) % boundary.vertices.length];
+  const edgeLength = distance(start, end);
+  const unit = { x: (end.x - start.x) / edgeLength, y: (end.y - start.y) / edgeLength };
+  const outwardSign = signedTwiceArea(boundary.vertices) >= 0 ? 1 : -1;
+  const normal = { x: unit.y * outwardSign, y: -unit.x * outwardSign };
+  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  const totalRun = Math.max(0, (pointer.x - midpoint.x) * normal.x + (pointer.y - midpoint.y) * normal.y);
+  const layout = calculateStairDragLayout(totalRun);
+  return layout ? { width, ...layout } : null;
 }
 
 export function validateStairPlacement(boundary, edgeId, options) {
@@ -26,7 +69,13 @@ export function validateStairPlacement(boundary, edgeId, options) {
   if (!Number.isFinite(options.width) || options.width < 24) issues.push('Stair width must be at least 24 inches.');
   if (options.width > edgeLength - 12) issues.push('Leave at least 6 inches of boundary edge on each side of the stair.');
   if (!Number.isFinite(options.totalRise) || options.totalRise <= 0) issues.push('Enter a positive total rise.');
-  if (!Number.isFinite(options.treadDepth) || options.treadDepth < 9) issues.push('Tread depth must be at least 9 inches for this planning model.');
+  if (!Number.isFinite(options.treadDepth) || options.treadDepth <= 0) issues.push('Tread depth must be positive.');
+  if (options.treadDepth > MAX_TREAD_DEPTH) issues.push('Each stair tread must be 11 inches or less.');
+  if (Number.isFinite(options.totalRise) && options.totalRise > 0) {
+    const layout = calculateStairLayout(options.totalRise, options.targetRiserHeight ?? MAX_RISER_HEIGHT, options.treadDepth);
+    const riserHeight = Number.isInteger(options.riserCount) && options.riserCount >= 2 ? options.totalRise / options.riserCount : layout.riserHeight;
+    if (riserHeight > MAX_RISER_HEIGHT) issues.push('Each stair riser must be 7.5 inches or less.');
+  }
   if (boundary.edges[edgeIndex]?.properties?.attachments?.stairId) issues.push('This edge already belongs to a staircase.');
   return { valid: issues.length === 0, issues, edgeLength };
 }
@@ -43,7 +92,17 @@ export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory 
   const unit = { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
   const outwardSign = signedTwiceArea(boundary.vertices) >= 0 ? 1 : -1;
   const normal = { x: unit.y * outwardSign, y: -unit.x * outwardSign };
-  const layout = calculateStairLayout(settings.totalRise, settings.targetRiserHeight, settings.treadDepth);
+  const calculatedLayout = calculateStairLayout(settings.totalRise, settings.targetRiserHeight, settings.treadDepth);
+  const layout = Number.isInteger(settings.riserCount) && settings.riserCount >= 2
+    ? {
+        stepCount: settings.riserCount,
+        riserCount: settings.riserCount,
+        treadCount: settings.riserCount - 1,
+        riserHeight: settings.totalRise / settings.riserCount,
+        treadDepth: settings.treadDepth,
+        totalRun: settings.totalRun ?? (settings.riserCount - 1) * settings.treadDepth,
+      }
+    : calculatedLayout;
   const margin = (length - settings.width) / 2;
   const openingStart = { id: idFactory('vertex'), x: start.x + unit.x * margin, y: start.y + unit.y * margin, elevation: 0 };
   const openingEnd = { id: idFactory('vertex'), x: start.x + unit.x * (margin + settings.width), y: start.y + unit.y * (margin + settings.width), elevation: 0 };
@@ -104,8 +163,10 @@ export function deriveStairTreads(boundary, stair) {
   const c = byId.get(stair.anchors.outerEndVertexId);
   const d = byId.get(stair.anchors.openingEndVertexId);
   if (![a, b, c, d].every(Boolean)) return [];
-  return Array.from({ length: stair.dimensions.stepCount }, (_, index) => {
-    const t = (index + 1) / stair.dimensions.stepCount;
+  const riserCount = stair.dimensions.riserCount ?? stair.dimensions.stepCount;
+  const treadCount = stair.dimensions.treadCount ?? Math.max(1, riserCount - 1);
+  return Array.from({ length: treadCount }, (_, index) => {
+    const t = (index + 1) / riserCount;
     return {
       start: { x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t },
       end: { x: d.x + (c.x - d.x) * t, y: d.y + (c.y - d.y) * t },
