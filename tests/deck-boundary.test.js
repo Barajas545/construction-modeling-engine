@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDeckBoundary, insertVertex, removeVertex, setEdgeRole, updateVertex, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
+import { createDeckBoundary, insertVertex, removeVertex, setEdgeRole, splitEdgeIntoSegments, updateVertex, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
 
 function ids() {
   let counter = 0;
@@ -38,6 +38,16 @@ test('splits an edge while retaining its identity and construction role', () => 
   assert.equal(expanded.edges[0].id, 'edge-5');
   assert.equal(expanded.edges[0].role, 'house');
   assert.equal(expanded.edges[1].role, 'house');
+});
+
+test('divides a construction edge into two or three property-preserving segments', () => {
+  const boundary = setEdgeRole(rectangle(), 'edge-5', 'house');
+  const divided = splitEdgeIntoSegments(boundary, 'edge-5', 3, ids());
+  assert.equal(divided.vertices.length, 6);
+  assert.equal(divided.edges.length, 6);
+  assert.equal(divided.edges[0].id, 'edge-5');
+  assert.deepEqual(divided.vertices.slice(1, 3).map((vertex) => vertex.x), [64, 128]);
+  assert.ok(divided.edges.slice(0, 3).every((edge) => edge.role === 'house'));
 });
 
 test('removes a corner without allowing an invalid two-corner boundary', () => {

@@ -14,3 +14,5 @@ Railing is a snap-anchored construction object created by pressing an edge, corn
 The UI resolves both anchors on every render and derives the current run geometry between them. Topology changes that would split or remove referenced construction geometry are currently blocked until dependency-aware repartitioning is implemented.
 
 Railing visibility is independent from the Dimensions layer. Edge/corner and grid snaps can be enabled separately, with construction geometry taking priority when both are active.
+
+Each run stores a railing `system` (`wild-hog` or `trex`) for future catalog and cost integration. Users may add panels manually, which adds posts while retaining the endpoints. Removing panels is clamped to the calculated minimum required to preserve the 72-inch maximum clear span.

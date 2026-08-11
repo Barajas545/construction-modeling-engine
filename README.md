@@ -14,6 +14,8 @@ Sprint 2 promotes every boundary segment into a typed construction edge with edi
 
 **Railing** uses a professional snap-to-snap line workflow. A user can begin at a construction edge, corner, or grid point and drag freely across the interior or exterior of the Deck Boundary to another active snap target while equal sections and posts appear in real time. Edge and grid snaps are independently configurable, and the complete Railing model layer can be hidden to expose construction geometry underneath. Runs use a maximum 6-foot clear span between 3.5-inch posts, share visible posts where they meet, and remain structured construction objects rather than sketch lines. This phase produces geometry and serializable quantities only; pricing remains intentionally outside the object.
 
+Single-click selection opens a temporary sticky object-actions panel at the top of the inspector. Railing actions include deletion, Decking visibility, safe panel-count adjustment, and a structured Wild Hog or Trex system assignment ready for future costing. Construction-edge actions include individual dimension visibility, Fascia and Picture Frame intent, and equal division into two or three property-preserving segments. Corners, dimensions, stairs, and stair interfaces expose their most useful safe actions through the same pattern.
+
 ## Run the workspace
 
 Use `npm start`, then open `http://localhost:4173`. The workspace stores the active project locally in the browser and can export a portable `.cme.json` project file.

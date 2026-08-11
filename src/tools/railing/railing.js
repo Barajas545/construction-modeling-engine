@@ -12,12 +12,15 @@ export function computeRailingLayout(length, options = {}) {
   const postWidth = options.postWidth ?? DEFAULT_POST_WIDTH;
   if (!Number.isFinite(length) || length <= 0) return { length: 0, sectionCount: 0, postCount: 0, posts: [], postsOverlap: false };
   const maxCenterSpacing = maxClearSpan + postWidth;
-  const sectionCount = Math.max(1, Math.ceil(length / maxCenterSpacing - EPSILON));
+  const minimumSectionCount = Math.max(1, Math.ceil(length / maxCenterSpacing - EPSILON));
+  const requestedSectionCount = Number.isFinite(options.sectionCountOverride) ? Math.floor(options.sectionCountOverride) : minimumSectionCount;
+  const sectionCount = Math.max(minimumSectionCount, requestedSectionCount);
   const centerSpacing = length / sectionCount;
   const clearSpan = Math.max(0, centerSpacing - postWidth);
   return {
     length,
     sectionCount,
+    minimumSectionCount,
     postCount: sectionCount + 1,
     centerSpacing,
     clearSpan,
@@ -102,8 +105,18 @@ export function createRailingLine(startAnchor, endAnchor, options = {}, idFactor
     settings: {
       maxClearSpan: options.maxClearSpan ?? DEFAULT_MAX_CLEAR_SPAN,
       postWidth: options.postWidth ?? DEFAULT_POST_WIDTH,
+      system: options.system ?? 'wild-hog',
+      sectionCountOverride: options.sectionCountOverride ?? null,
     },
     lifecycle: { phase: 'established', revision: 1 },
+  };
+}
+
+export function updateRailingSettings(railing, patch) {
+  return {
+    ...railing,
+    settings: { ...railing.settings, ...patch },
+    lifecycle: { ...railing.lifecycle, revision: (railing.lifecycle?.revision ?? 1) + 1 },
   };
 }
 

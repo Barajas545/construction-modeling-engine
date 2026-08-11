@@ -17,4 +17,4 @@ Boundary-edge dimensions open the existing exact-length editor. The Deck–Stair
 
 ## Data boundary
 
-The layer is stored as a `dimension-layer` project object. It contains only visibility and label offsets. Displayed measurements remain derived from current geometry, so exported project data never contains a stale duplicated length.
+The layer is stored as a `dimension-layer` project object. It contains visibility, label offsets, and hidden reference IDs. Displayed measurements remain derived from current geometry, so exported project data never contains a stale duplicated length. Individual contextual Add dimension and Delete dimension actions never modify the linked construction object.

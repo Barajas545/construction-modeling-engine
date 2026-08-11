@@ -106,6 +106,32 @@ export function insertVertex(boundary, edgeId, position, idFactory = defaultId) 
   return withComputedProperties({ ...boundary, vertices: vertices.map((entry, order) => ({ ...entry, order })), edges });
 }
 
+export function splitEdgeIntoSegments(boundary, edgeId, segmentCount, idFactory = defaultId) {
+  if (![2, 3].includes(segmentCount)) throw new Error('A construction edge can be divided into two or three segments.');
+  const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
+  if (edgeIndex < 0) throw new Error('Deck boundary edge was not found.');
+  const edge = normalizeBoundaryEdge(boundary.edges[edgeIndex]);
+  const start = boundary.vertices[edgeIndex];
+  const end = boundary.vertices[(edgeIndex + 1) % boundary.vertices.length];
+  const insertedVertices = Array.from({ length: segmentCount - 1 }, (_, index) => {
+    const t = (index + 1) / segmentCount;
+    return { id: idFactory('vertex'), x: start.x + (end.x - start.x) * t, y: start.y + (end.y - start.y) * t, elevation: 0 };
+  });
+  const vertices = [...boundary.vertices];
+  vertices.splice(edgeIndex + 1, 0, ...insertedVertices);
+  const chain = [start, ...insertedVertices, end];
+  const replacementEdges = Array.from({ length: segmentCount }, (_, index) => normalizeBoundaryEdge({
+    ...edge,
+    id: index === 0 ? edge.id : idFactory('edge'),
+    startVertexId: chain[index].id,
+    endVertexId: chain[index + 1].id,
+    metadata: { ...edge.metadata, splitFromEdgeId: edge.id, splitSegment: index + 1, splitSegmentCount: segmentCount },
+  }));
+  const edges = [...boundary.edges];
+  edges.splice(edgeIndex, 1, ...replacementEdges);
+  return withComputedProperties({ ...boundary, vertices: vertices.map((vertex, order) => ({ ...vertex, order })), edges });
+}
+
 export function removeVertex(boundary, vertexId) {
   if (boundary.vertices.length <= 3) throw new Error('A deck boundary needs at least three corners.');
   const index = boundary.vertices.findIndex((vertex) => vertex.id === vertexId);

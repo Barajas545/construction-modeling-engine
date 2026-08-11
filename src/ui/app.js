@@ -1,7 +1,8 @@
 import { createProjectDocument, parseProject, serializeProject, setProjectWorkflowStage, upsertObject } from '../core/document/project-document.js';
 import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
-import { getDimensionLayer, getDimensionOffset, setDimensionLayerVisibility, setDimensionOffset } from '../core/annotations/dimension-layer.js';
+import { getDimensionLayer, getDimensionOffset, isDimensionReferenceVisible, setDimensionLayerVisibility, setDimensionOffset, setDimensionReferenceVisibility } from '../core/annotations/dimension-layer.js';
+import { getDeckingLayer, setDeckingLayerVisibility } from '../core/annotations/decking-layer.js';
 import { getRailingLayer, setRailingLayerVisibility, setRailingSnapSettings } from '../core/annotations/railing-layer.js';
 import { collectSnapTargets, resolveSnap } from '../core/geometry/snap-engine.js';
 import { nearestPointOnSegment } from '../core/geometry/vector.js';
@@ -9,9 +10,9 @@ import { formatFeetInches, formatSquareFeet } from '../core/units/length.js';
 import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
-import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, removeVertex, setEdgeLength, setEdgeRole, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, removeVertex, setEdgeLength, setEdgeRole, splitEdgeIntoSegments, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
-import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap } from '../tools/railing/railing.js';
+import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'cme.project.v1';
@@ -120,11 +121,45 @@ function render() {
           <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span></div><small>Release to build · 7.5″ max rise · 11″ max tread</small></div>
           <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
         </section>
-        <aside class="inspector open">${renderProgress(progress, current)}${renderInspector(current, validation)}${renderLayerAndSnapControls()}</aside>
+        <aside class="inspector open">${renderContextPanel(current)}${renderProgress(progress, current)}${renderInspector(current, validation)}${renderLayerAndSnapControls()}</aside>
       </section>
     </main>`;
   bindEvents();
   drawCanvas(app.querySelector('.model-canvas'), current, validation);
+}
+
+function renderContextPanel(current) {
+  if (!selected.kind || !current) return '';
+  const deckingVisible = getDeckingLayer(documentModel).visible;
+  const close = '<button class="context-close" data-action="clear-selection" aria-label="Close object options">×</button>';
+  if (selected.kind === 'railing') {
+    const geometry = findRailingGeometry(selected.id);
+    if (!geometry) return '';
+    const system = geometry.railing.settings?.system ?? 'wild-hog';
+    const canRemovePanel = geometry.sectionCount > geometry.minimumSectionCount;
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected railing</div><h2>${formatFeetInches(geometry.length)}</h2></div>${close}</div><div class="context-stat"><span>Panels</span><strong>${geometry.sectionCount}</strong><small>${geometry.postCount} posts</small></div><div class="context-stepper"><button class="button" data-action="remove-railing-panel" ${canRemovePanel ? '' : 'disabled'}>− Panel</button><button class="button" data-action="add-railing-panel">+ Panel</button></div><label class="context-select"><span>Railing type</span><select id="quick-railing-system"><option value="wild-hog" ${system === 'wild-hog' ? 'selected' : ''}>Wild Hog panel</option><option value="trex" ${system === 'trex' ? 'selected' : ''}>Trex railing</option></select></label><div class="context-actions"><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button><button class="button danger" data-action="remove-railing">Delete railing</button></div><div class="context-note">Panel changes preserve both endpoints and the 6 ft maximum clear span.</div></section>`;
+  }
+  if (selected.kind === 'edge') {
+    const edge = current.edges.find((entry) => entry.id === selected.id);
+    if (!edge) return '';
+    const index = current.edges.findIndex((entry) => entry.id === edge.id);
+    const length = Math.hypot(current.vertices[(index + 1) % current.vertices.length].x - current.vertices[index].x, current.vertices[(index + 1) % current.vertices.length].y - current.vertices[index].y);
+    const properties = normalizeBoundaryEdge(edge).properties;
+    const dimensionVisible = getDimensionLayer(documentModel).visible && isDimensionReferenceVisible(documentModel, edge.id);
+    const breakDisabled = edgeHasRailingDependency(edge.id);
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction edge</div><h2>${formatFeetInches(length)}</h2></div>${close}</div><div class="context-actions context-actions-3"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="break-edge-2" ${breakDisabled ? 'disabled' : ''}>Break ×2</button><button class="button" data-action="break-edge-3" ${breakDisabled ? 'disabled' : ''}>Break ×3</button></div><div class="context-actions"><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div><button class="button context-full" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button>${breakDisabled ? '<div class="context-note">Remove connected railing before dividing this edge.</div>' : ''}</section>`;
+  }
+  if (selected.kind === 'stair-edge') {
+    const reference = findStairInterfaceByEdgeId(selected.id);
+    if (!reference) return '';
+    const properties = normalizeBoundaryEdge(reference.edge).properties;
+    const dimensionVisible = getDimensionLayer(documentModel).visible && isDimensionReferenceVisible(documentModel, reference.edge.id);
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected stair interface</div><h2>Deck–Stair line</h2></div>${close}</div><div class="context-actions"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button></div><div class="context-actions"><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div></section>`;
+  }
+  if (selected.kind === 'vertex') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected corner</div><h2>Boundary vertex</h2></div>${close}</div><div class="context-actions"><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Delete corner</button></div></section>`;
+  if (selected.kind === 'dimension') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected annotation</div><h2>Dimension</h2></div>${close}</div><div class="context-actions"><button class="button primary" data-action="edit-dimension">Edit object</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><button class="button danger context-full" data-action="toggle-selected-dimension">Delete dimension</button></section>`;
+  if (selected.kind === 'stair') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction object</div><h2>Stair</h2></div>${close}</div><div class="context-actions"><button class="button" data-action="select-stair-interface">Select deck interface</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button></div></section>`;
+  return '';
 }
 
 function renderProgress(progress, current) {
@@ -141,7 +176,8 @@ function renderGridControls() {
 function renderLayerAndSnapControls() {
   const dimensionsVisible = getDimensionLayer(documentModel).visible;
   const railingLayer = getRailingLayer(documentModel);
-  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label></section><section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Construction geometry takes priority over the grid. Disable either source when a different placement is needed.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${railingLayer.snap.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${railingLayer.snap.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><label class="toggle-row"><input id="grid-visible" type="checkbox" ${gridVisible ? 'checked' : ''}><span>Show construction grid</span></label><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
+  const deckingLayer = getDeckingLayer(documentModel);
+  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label></section><section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Construction geometry takes priority over the grid. Disable either source when a different placement is needed.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${railingLayer.snap.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${railingLayer.snap.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><label class="toggle-row"><input id="grid-visible" type="checkbox" ${gridVisible ? 'checked' : ''}><span>Show construction grid</span></label><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
 }
 
 function renderInspector(current, validation) {
@@ -389,7 +425,7 @@ function renderRailingGeometry(svg, geometry, preview) {
 
 function renderBoundarySvg(svg, current, validation) {
   const points = current.vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ');
-  svg.append(svgElement('polygon', { points, class: `boundary-fill ${validation.valid ? '' : 'invalid'}` }));
+  if (getDeckingLayer(documentModel).visible) svg.append(svgElement('polygon', { points, class: `boundary-fill ${validation.valid ? '' : 'invalid'}` }));
   current.edges.forEach((edge, index) => {
     const start = current.vertices[index];
     const end = current.vertices[(index + 1) % current.vertices.length];
@@ -440,6 +476,7 @@ function renderEdgeConstructionGraphics(svg, current, start, end, properties) {
 }
 
 function addDimension(svg, start, end, referenceId) {
+  if (!isDimensionReferenceVisible(documentModel, referenceId)) return;
   const midX = (start.x + end.x) / 2;
   const midY = (start.y + end.y) / 2;
   const dx = end.x - start.x;
@@ -500,6 +537,11 @@ function bindEvents() {
     message = `Railing layer ${railingVisibility.checked ? 'shown' : 'hidden'}`;
     commit(setRailingLayerVisibility(documentModel, railingVisibility.checked), 'Toggle Railing layer');
   });
+  const deckingVisibility = app.querySelector('#decking-visible');
+  if (deckingVisibility) deckingVisibility.addEventListener('change', () => {
+    message = `Decking layer ${deckingVisibility.checked ? 'shown' : 'hidden'}`;
+    commit(setDeckingLayerVisibility(documentModel, deckingVisibility.checked), 'Toggle Decking layer');
+  });
   const edgeSnap = app.querySelector('#snap-edges');
   if (edgeSnap) edgeSnap.addEventListener('change', () => {
     message = `Edge and corner snap ${edgeSnap.checked ? 'enabled' : 'disabled'}`;
@@ -509,6 +551,13 @@ function bindEvents() {
   if (gridSnap) gridSnap.addEventListener('change', () => {
     message = `Grid snap ${gridSnap.checked ? 'enabled' : 'disabled'}`;
     commit(setRailingSnapSettings(documentModel, { grid: gridSnap.checked }), 'Update Railing snap settings');
+  });
+  const railingSystem = app.querySelector('#quick-railing-system');
+  if (railingSystem) railingSystem.addEventListener('change', () => {
+    const railing = documentModel.objects.find((object) => object.type === 'railing-run' && object.id === selected.id);
+    if (!railing) return;
+    message = `${railingSystem.options[railingSystem.selectedIndex].text} assigned`;
+    commit(upsertObject(documentModel, updateRailingSettings(railing, { system: railingSystem.value })), 'Set railing system');
   });
   const svg = app.querySelector('.model-canvas');
   svg.addEventListener('pointerdown', (event) => canvasPointerDown(svg, event));
@@ -973,6 +1022,38 @@ function removeSelectedRailing() {
   commit(next, 'Remove railing run');
 }
 
+function adjustSelectedRailingPanels(delta) {
+  const geometry = findRailingGeometry(selected.id);
+  if (!geometry) return;
+  const nextCount = Math.max(geometry.minimumSectionCount, geometry.sectionCount + delta);
+  if (nextCount === geometry.sectionCount) {
+    message = 'This railing is already at the minimum safe panel count';
+    render();
+    return;
+  }
+  const updated = updateRailingSettings(geometry.railing, { sectionCountOverride: nextCount });
+  message = `${nextCount} panels · ${nextCount + 1} posts`;
+  commit(upsertObject(documentModel, updated), delta > 0 ? 'Add railing panel' : 'Remove railing panel');
+}
+
+function toggleSelectedDimension() {
+  const referenceId = selected.id;
+  if (!referenceId) return;
+  const visible = getDimensionLayer(documentModel).visible && isDimensionReferenceVisible(documentModel, referenceId);
+  message = `Dimension ${visible ? 'removed' : 'added'}`;
+  let next = setDimensionReferenceVisibility(documentModel, referenceId, !visible);
+  if (!visible && !getDimensionLayer(next).visible) next = setDimensionLayerVisibility(next, true);
+  if (selected.kind === 'dimension' && visible) selected = { kind: null, id: null };
+  commit(next, visible ? 'Hide selected dimension' : 'Show selected dimension');
+}
+
+function breakSelectedEdge(segmentCount) {
+  if (selected.kind !== 'edge' || edgeHasRailingDependency(selected.id)) return;
+  const divided = markBoundaryEdited(splitEdgeIntoSegments(boundary(), selected.id, segmentCount));
+  message = `Construction edge divided into ${segmentCount} equal segments`;
+  commitBoundary(divided, `Divide construction edge into ${segmentCount} segments`);
+}
+
 function resolveRailingSnap(raw) {
   const layer = getRailingLayer(documentModel);
   const current = boundary();
@@ -1110,6 +1191,29 @@ function completeDraft() {
 }
 
 function handleAction(action) {
+  if (action === 'clear-selection') { selected = { kind: null, id: null }; message = 'Ready'; render(); }
+  if (action === 'add-railing-panel' && selected.kind === 'railing') adjustSelectedRailingPanels(1);
+  if (action === 'remove-railing-panel' && selected.kind === 'railing') adjustSelectedRailingPanels(-1);
+  if (action === 'toggle-decking') {
+    const visible = !getDeckingLayer(documentModel).visible;
+    message = `Decking layer ${visible ? 'shown' : 'hidden'}`;
+    commit(setDeckingLayerVisibility(documentModel, visible), 'Toggle Decking layer');
+  }
+  if (action === 'toggle-selected-dimension' && ['edge', 'stair-edge', 'dimension'].includes(selected.kind)) toggleSelectedDimension();
+  if (action === 'break-edge-2') breakSelectedEdge(2);
+  if (action === 'break-edge-3') breakSelectedEdge(3);
+  if (action === 'quick-fascia' && ['edge', 'stair-edge'].includes(selected.kind)) {
+    const edge = selected.kind === 'edge' ? boundary().edges.find((entry) => entry.id === selected.id) : findStairInterfaceByEdgeId(selected.id)?.edge;
+    if (edge) { message = 'Fascia property updated'; commitSelectedEdgeProperties({ finishes: { fascia: !normalizeBoundaryEdge(edge).properties.finishes.fascia } }, 'Toggle edge fascia'); }
+  }
+  if (action === 'quick-picture-frame' && ['edge', 'stair-edge'].includes(selected.kind)) {
+    const edge = selected.kind === 'edge' ? boundary().edges.find((entry) => entry.id === selected.id) : findStairInterfaceByEdgeId(selected.id)?.edge;
+    if (edge) { message = 'Picture frame property updated'; commitSelectedEdgeProperties({ finishes: { pictureFrame: !normalizeBoundaryEdge(edge).properties.finishes.pictureFrame } }, 'Toggle edge picture frame'); }
+  }
+  if (action === 'select-stair-interface' && selected.kind === 'stair') {
+    const stair = documentModel.objects.find((object) => object.type === 'stair' && object.id === selected.id);
+    if (stair) { selected = { kind: 'stair-edge', id: getStairInterfaceEdge(stair).id }; message = 'Deck–Stair interface selected'; render(); }
+  }
   if (action === 'create-rectangle') {
     const width = Number(app.querySelector('#width').value) * 12;
     const depth = Number(app.querySelector('#depth').value) * 12;

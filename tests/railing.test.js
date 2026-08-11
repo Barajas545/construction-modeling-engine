@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeRailingGeometries, computeRailingLayout, createRailingLine, createRailingRun, deriveRailingGeometry, deriveRailingLineGeometry, projectPointToEdge, resolveRailingEndpointSnap } from '../src/tools/railing/railing.js';
+import { analyzeRailingGeometries, computeRailingLayout, createRailingLine, createRailingRun, deriveRailingGeometry, deriveRailingLineGeometry, projectPointToEdge, resolveRailingEndpointSnap, updateRailingSettings } from '../src/tools/railing/railing.js';
 
 test('uses the fewest equal sections that keep clear span at or below six feet', () => {
   const cases = [[60, 1], [96, 2], [144, 2], [156, 3], [192, 3], [240, 4], [300, 4]];
@@ -65,4 +65,14 @@ test('railing endpoint snap prioritizes corners, then edges, then grid', () => {
   assert.equal(resolveRailingEndpointSnap({ x: 60, y: 3 }, targets, { tolerance: 8 }).snapType, 'edge');
   assert.deepEqual(resolveRailingEndpointSnap({ x: 61, y: 17 }, targets, { tolerance: 8, gridSpacing: 6 }).point, { x: 60, y: 18 });
   assert.equal(resolveRailingEndpointSnap({ x: 61, y: 17 }, targets, { edges: false, grid: false }), null);
+});
+
+test('manual panel count may add posts but never violate the minimum layout', () => {
+  assert.equal(computeRailingLayout(144, { sectionCountOverride: 4 }).sectionCount, 4);
+  assert.equal(computeRailingLayout(144, { sectionCountOverride: 1 }).sectionCount, 2);
+  const railing = createRailingLine({ point: { x: 0, y: 0 } }, { point: { x: 144, y: 0 } }, {}, () => 'r1');
+  const updated = updateRailingSettings(railing, { system: 'trex', sectionCountOverride: 3 });
+  assert.equal(updated.settings.system, 'trex');
+  assert.equal(updated.settings.sectionCountOverride, 3);
+  assert.equal(updated.lifecycle.revision, 2);
 });

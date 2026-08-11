@@ -9,6 +9,7 @@ export function createDimensionLayer(overrides = {}) {
     name: 'Dimensions',
     visible: true,
     offsets: {},
+    hiddenReferenceIds: [],
     ...overrides,
   };
 }
@@ -43,4 +44,16 @@ export function setDimensionOffset(document, referenceId, offset) {
 
 export function getDimensionOffset(document, referenceId) {
   return getDimensionLayer(document).offsets[referenceId] ?? { x: 0, y: 0 };
+}
+
+export function isDimensionReferenceVisible(document, referenceId) {
+  return !getDimensionLayer(document).hiddenReferenceIds.includes(referenceId);
+}
+
+export function setDimensionReferenceVisibility(document, referenceId, visible) {
+  const layer = getDimensionLayer(document);
+  const hidden = new Set(layer.hiddenReferenceIds);
+  if (visible) hidden.delete(referenceId);
+  else hidden.add(referenceId);
+  return replaceDimensionLayer(document, { ...layer, hiddenReferenceIds: [...hidden] });
 }
