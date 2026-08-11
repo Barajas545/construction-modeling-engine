@@ -132,6 +132,52 @@ export function splitEdgeIntoSegments(boundary, edgeId, segmentCount, idFactory 
   return withComputedProperties({ ...boundary, vertices: vertices.map((vertex, order) => ({ ...vertex, order })), edges });
 }
 
+export function getBoundaryCentroid(boundary) {
+  const vertices = boundary.vertices;
+  const twiceArea = vertices.reduce((sum, vertex, index) => {
+    const next = vertices[(index + 1) % vertices.length];
+    return sum + vertex.x * next.y - next.x * vertex.y;
+  }, 0);
+  if (Math.abs(twiceArea) < 1e-9) {
+    return vertices.reduce((center, vertex) => ({ x: center.x + vertex.x / vertices.length, y: center.y + vertex.y / vertices.length }), { x: 0, y: 0 });
+  }
+  const weighted = vertices.reduce((center, vertex, index) => {
+    const next = vertices[(index + 1) % vertices.length];
+    const cross = vertex.x * next.y - next.x * vertex.y;
+    return { x: center.x + (vertex.x + next.x) * cross, y: center.y + (vertex.y + next.y) * cross };
+  }, { x: 0, y: 0 });
+  return { x: weighted.x / (3 * twiceArea), y: weighted.y / (3 * twiceArea) };
+}
+
+export function orthogonalizeBoundary(boundary) {
+  const count = boundary.vertices.length;
+  const xParent = Array.from({ length: count }, (_, index) => index);
+  const yParent = Array.from({ length: count }, (_, index) => index);
+  const find = (parents, index) => parents[index] === index ? index : (parents[index] = find(parents, parents[index]));
+  const union = (parents, a, b) => { const rootA = find(parents, a); const rootB = find(parents, b); if (rootA !== rootB) parents[rootB] = rootA; };
+  boundary.vertices.forEach((vertex, index) => {
+    const nextIndex = (index + 1) % count;
+    const next = boundary.vertices[nextIndex];
+    if (Math.abs(next.x - vertex.x) >= Math.abs(next.y - vertex.y)) union(yParent, index, nextIndex);
+    else union(xParent, index, nextIndex);
+  });
+  const averages = (parents, key) => {
+    const groups = new Map();
+    boundary.vertices.forEach((vertex, index) => {
+      const root = find(parents, index);
+      const group = groups.get(root) ?? { sum: 0, count: 0 };
+      group.sum += vertex[key]; group.count += 1; groups.set(root, group);
+    });
+    return boundary.vertices.map((_, index) => { const group = groups.get(find(parents, index)); return group.sum / group.count; });
+  };
+  const xs = averages(xParent, 'x');
+  const ys = averages(yParent, 'y');
+  const orthogonal = withComputedProperties({ ...boundary, vertices: boundary.vertices.map((vertex, index) => ({ ...vertex, x: xs[index], y: ys[index] })) });
+  const validation = validateDeckBoundary(orthogonal);
+  if (!validation.valid) throw new Error(`90° conversion is not valid: ${validation.issues[0].message}`);
+  return orthogonal;
+}
+
 export function removeVertex(boundary, vertexId) {
   if (boundary.vertices.length <= 3) throw new Error('A deck boundary needs at least three corners.');
   const index = boundary.vertices.findIndex((vertex) => vertex.id === vertexId);

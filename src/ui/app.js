@@ -10,7 +10,8 @@ import { formatFeetInches, formatSquareFeet } from '../core/units/length.js';
 import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
-import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, removeVertex, setEdgeLength, setEdgeRole, splitEdgeIntoSegments, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeRole, splitEdgeIntoSegments, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { createLevelDown, setLevelDownRiserHeight, splitLevelDownSegment } from '../tools/level-down/level-down.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
 
@@ -46,6 +47,8 @@ let stairGesture = null;
 let dimensionDragStart = null;
 let railingDraft = null;
 let railingGesture = null;
+let levelDownDraft = [];
+let levelDownPointer = null;
 
 function loadProject() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -103,6 +106,7 @@ function render() {
           <button class="tool-button ${mode === 'draw' ? 'active' : ''}" data-mode="draw" title="Draw a custom deck boundary"><span class="tool-icon">◇</span><span class="tool-label">Boundary</span></button>
           <button class="tool-button ${mode === 'stair' ? 'active' : ''}" data-mode="stair" title="Attach stairs to a boundary edge" ${!current ? 'disabled' : ''}><span class="tool-icon">▰</span><span class="tool-label">Stairs</span></button>
           <button class="tool-button ${mode === 'railing' ? 'active' : ''}" data-mode="railing" title="Add railing along a construction edge" ${!current ? 'disabled' : ''}><span class="tool-icon">╥</span><span class="tool-label">Railing</span></button>
+          <button class="tool-button ${mode === 'level-down' ? 'active' : ''}" data-mode="level-down" title="Add a level-down construction line" ${!current ? 'disabled' : ''}><span class="tool-icon">↘</span><span class="tool-label">Level down</span></button>
           <div class="tool-spacer"></div>
           <button class="tool-button" data-action="toggle-inspector" title="Project details"><span class="tool-icon">☷</span><span class="tool-label">Details</span></button>
         </nav>
@@ -115,8 +119,9 @@ function render() {
             <button class="button ${mode === 'draw' ? 'primary' : 'ghost'}" data-mode="draw">Draw outline</button>
             <button class="button ${dimensionLayer.visible ? 'active-constraint' : 'ghost'}" data-action="toggle-dimensions" title="Show or hide the Dimensions layer">${dimensionLayer.visible ? '◉' : '○'} Dimensions</button>
             ${draft.length >= 3 ? '<button class="button primary" data-action="complete-draft">Close boundary</button>' : ''}
+            ${mode === 'level-down' ? '<button class="button primary" data-action="cancel-level-down">Cancel Level Down</button>' : ''}
           </div>
-          <svg class="model-canvas ${mode === 'draw' ? 'drawing' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
+          <svg class="model-canvas ${mode === 'draw' || mode === 'level-down' ? 'drawing' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
           <div class="cursor-hud" aria-live="polite"><div class="hud-row"><span>Length</span><strong data-hud-length>—</strong></div><div class="hud-row"><span>Angle</span><strong data-hud-angle>—</strong></div><div class="hud-row snap"><span data-hud-snap-dot></span><strong data-hud-snap>Grid</strong></div><div class="hud-input" data-hud-input>Type a length</div></div>
           <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span></div><small>Release to build · 7.5″ max rise · 11″ max tread</small></div>
           <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
@@ -147,7 +152,7 @@ function renderContextPanel(current) {
     const properties = normalizeBoundaryEdge(edge).properties;
     const dimensionVisible = getDimensionLayer(documentModel).visible && isDimensionReferenceVisible(documentModel, edge.id);
     const breakDisabled = edgeHasRailingDependency(edge.id);
-    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction edge</div><h2>${formatFeetInches(length)}</h2></div>${close}</div><div class="context-actions context-actions-3"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="break-edge-2" ${breakDisabled ? 'disabled' : ''}>Break ×2</button><button class="button" data-action="break-edge-3" ${breakDisabled ? 'disabled' : ''}>Break ×3</button></div><div class="context-actions"><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div><button class="button context-full" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button>${breakDisabled ? '<div class="context-note">Remove connected railing before dividing this edge.</div>' : ''}</section>`;
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction edge</div><h2>${formatFeetInches(length)}</h2></div>${close}</div><div class="context-actions context-actions-3"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="break-edge-2" ${breakDisabled ? 'disabled' : ''}>Break ×2</button><button class="button" data-action="break-edge-3" ${breakDisabled ? 'disabled' : ''}>Break ×3</button></div><div class="context-actions context-actions-3"><button class="button ${edge.role === 'house' ? 'active-constraint' : ''}" data-action="quick-house-attachment">House attachment</button><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div><button class="button context-full" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button>${breakDisabled ? '<div class="context-note">Remove connected railing before dividing this edge.</div>' : ''}</section>`;
   }
   if (selected.kind === 'stair-edge') {
     const reference = findStairInterfaceByEdgeId(selected.id);
@@ -157,7 +162,16 @@ function renderContextPanel(current) {
     return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected stair interface</div><h2>Deck–Stair line</h2></div>${close}</div><div class="context-actions"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button></div><div class="context-actions"><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div></section>`;
   }
   if (selected.kind === 'vertex') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected corner</div><h2>Boundary vertex</h2></div>${close}</div><div class="context-actions"><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Delete corner</button></div></section>`;
-  if (selected.kind === 'dimension') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected annotation</div><h2>Dimension</h2></div>${close}</div><div class="context-actions"><button class="button primary" data-action="edit-dimension">Edit object</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><button class="button danger context-full" data-action="toggle-selected-dimension">Delete dimension</button></section>`;
+  if (selected.kind === 'dimension') {
+    const reference = resolveDimensionReference(selected.id);
+    if (reference?.kind === 'area') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(current.computed.areaSquareInches)}</h2></div>${close}</div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button primary" data-action="start-level-down">Add level down</button></div><button class="button context-full" data-action="reset-dimension-position">Reset area position</button><div class="context-note">Level Down starts and ends on the Deck Boundary. Intermediate clicks create a polyline.</div></section>`;
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected annotation</div><h2>Dimension</h2></div>${close}</div><div class="context-actions"><button class="button primary" data-action="edit-dimension">Edit object</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><button class="button danger context-full" data-action="toggle-selected-dimension">Delete dimension</button></section>`;
+  }
+  if (selected.kind === 'level-down') {
+    const reference = findLevelDownSegment(selected.id);
+    if (!reference) return '';
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected Level Down</div><h2>${formatFeetInches(reference.length)}</h2></div>${close}</div><label class="context-select"><span>Riser height · entire polyline</span><div class="compound-field"><input id="quick-level-down-riser" value="${formatFeetInches(reference.levelDown.dimensions.riserHeight)}"><button class="button" data-action="apply-level-down-riser">Apply</button></div></label><div class="context-actions"><button class="button" data-action="break-level-down-2">Break ×2</button><button class="button" data-action="break-level-down-3">Break ×3</button></div><div class="context-actions"><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button><button class="button danger" data-action="delete-level-down">Delete Level Down</button></div><div class="context-note">Riser changes apply to every section of this Level Down. Railing posts remain unchanged.</div></section>`;
+  }
   if (selected.kind === 'stair') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction object</div><h2>Stair</h2></div>${close}</div><div class="context-actions"><button class="button" data-action="select-stair-interface">Select deck interface</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button></div></section>`;
   return '';
 }
@@ -289,8 +303,24 @@ function getAllRailingGeometries() {
   return documentModel.objects.filter((object) => object.type === 'railing-run').map((railing) => findRailingGeometry(railing.id)).filter(Boolean);
 }
 
+function areaDimensionId(current = boundary()) {
+  return current ? `${current.id}:area` : null;
+}
+
+function findLevelDownSegment(segmentId) {
+  for (const levelDown of documentModel.objects.filter((object) => object.type === 'level-down')) {
+    const index = levelDown.segments.findIndex((segment) => segment.id === segmentId);
+    if (index < 0) continue;
+    const start = levelDown.vertices[index];
+    const end = levelDown.vertices[index + 1];
+    return { levelDown, segment: levelDown.segments[index], index, start, end, length: Math.hypot(end.x - start.x, end.y - start.y) };
+  }
+  return null;
+}
+
 function resolveDimensionReference(referenceId) {
   const current = boundary();
+  if (current && referenceId === areaDimensionId(current)) return { kind: 'area', boundary: current, label: `${formatSquareFeet(current.computed.areaSquareInches)} deck area` };
   const railingGeometry = findRailingGeometry(referenceId);
   if (railingGeometry) return { kind: 'railing', railing: railingGeometry.railing, geometry: railingGeometry, label: `${formatFeetInches(railingGeometry.length)} railing run` };
   const edgeIndex = current?.edges.findIndex((edge) => edge.id === referenceId) ?? -1;
@@ -347,6 +377,7 @@ function drawCanvas(svg, current, validation) {
     renderBoundarySvg(svg, current, validation);
     renderStairGraphics(svg, current);
     renderStairPreview(svg, current);
+    renderLevelDownGraphics(svg, current);
     renderRailingGraphics(svg);
   }
   if (draft.length) renderDraft(svg);
@@ -442,6 +473,46 @@ function renderBoundarySvg(svg, current, validation) {
     svg.append(svgElement('rect', { x: vertex.x - hitSize / 2, y: vertex.y - hitSize / 2, width: hitSize, height: hitSize, class: 'vertex-hit', 'data-vertex-id': vertex.id }));
     svg.append(svgElement('rect', { x: vertex.x - markerSize / 2, y: vertex.y - markerSize / 2, width: markerSize, height: markerSize, rx: markerSize * .12, class: `vertex ${selected.kind === 'vertex' && selected.id === vertex.id ? 'selected' : ''} ${mergeCandidateId === vertex.id ? 'merge-ready' : ''}`, transform: `rotate(45 ${vertex.x} ${vertex.y})` }));
   });
+  if (getDimensionLayer(documentModel).visible) renderAreaDimension(svg, current);
+}
+
+function renderAreaDimension(svg, current) {
+  const referenceId = areaDimensionId(current);
+  if (!isDimensionReferenceVisible(documentModel, referenceId)) return;
+  const center = getBoundaryCentroid(current);
+  const offset = getDimensionOffset(documentModel, referenceId);
+  const label = `AREA · ${formatSquareFeet(current.computed.areaSquareInches)}`;
+  const width = Math.max(46, label.length * 3.5);
+  const selectedClass = selected.kind === 'dimension' && selected.id === referenceId ? 'selected' : '';
+  const group = svgElement('g', { class: 'dimension-annotation area-dimension', transform: `translate(${offset.x} ${offset.y})` });
+  group.append(svgElement('rect', { x: center.x - width / 2 - 3, y: center.y - 8, width: width + 6, height: 16, rx: 4, class: 'dimension-hit', 'data-dimension-id': referenceId }));
+  group.append(svgElement('rect', { x: center.x - width / 2, y: center.y - 6, width, height: 12, rx: 3, class: `dimension-bg area ${selectedClass}`, 'data-dimension-id': referenceId }));
+  const text = svgElement('text', { x: center.x, y: center.y + 1, class: 'dimension-text area' });
+  text.textContent = label;
+  group.append(text);
+  svg.append(group);
+}
+
+function renderLevelDownGraphics(svg, current) {
+  documentModel.objects.filter((object) => object.type === 'level-down' && object.host.boundaryId === current.id).forEach((levelDown) => {
+    levelDown.segments.forEach((segment, index) => {
+      const start = levelDown.vertices[index];
+      const end = levelDown.vertices[index + 1];
+      const selectedClass = selected.kind === 'level-down' && selected.id === segment.id ? 'selected' : '';
+      svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `level-down-line ${selectedClass}` }));
+      svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'level-down-hit', 'data-level-down-segment-id': segment.id }));
+    });
+    const start = levelDown.vertices[0];
+    const end = levelDown.vertices[1];
+    const label = svgElement('text', { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 - 5, class: 'level-down-label' });
+    label.textContent = `↓ ${formatFeetInches(levelDown.dimensions.riserHeight)} LEVEL DOWN`;
+    svg.append(label);
+  });
+  if (levelDownDraft.length) {
+    const points = [...levelDownDraft.map((entry) => entry.point), ...(levelDownPointer ? [levelDownPointer.point] : [])];
+    svg.append(svgElement('polyline', { points: points.map((entry) => `${entry.x},${entry.y}`).join(' '), class: 'level-down-preview', fill: 'none' }));
+    points.forEach((point) => svg.append(svgElement('rect', { x: point.x - 2.5, y: point.y - 2.5, width: 5, height: 5, class: 'level-down-marker', transform: `rotate(45 ${point.x} ${point.y})` })));
+  }
 }
 
 function renderEdgeConstructionGraphics(svg, current, start, end, properties) {
@@ -575,6 +646,7 @@ function setMode(nextMode) {
   stairGesture = null;
   railingGesture = null;
   railingDraft = null;
+  if (nextMode !== 'level-down') { levelDownDraft = []; levelDownPointer = null; }
   if (mode !== 'stair') stairDraft = null;
   if (mode !== 'draw') { draft = []; pointerWorld = null; message = 'Ready'; }
   if (mode === 'draw') message = 'Click the first corner of the deck';
@@ -586,6 +658,7 @@ function setMode(nextMode) {
     }
     message = 'Press an edge, corner, or grid point and drag to another snap target';
   }
+  if (mode === 'level-down') message = 'Click a boundary edge or corner to start Level Down';
   render();
 }
 
@@ -595,7 +668,8 @@ function canvasPointerDown(svg, event) {
   const stairEdgeId = event.target.dataset.stairEdgeId;
   const dimensionId = event.target.dataset.dimensionId;
   const railingId = event.target.dataset.railingId;
-  if (event.pointerType === 'touch' && mode !== 'railing' && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || dimensionId || railingId)) || (mode === 'stair' && edgeId))) {
+  const levelDownSegmentId = event.target.dataset.levelDownSegmentId;
+  if (event.pointerType === 'touch' && !['railing', 'level-down'].includes(mode) && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || dimensionId || railingId || levelDownSegmentId)) || (mode === 'stair' && edgeId))) {
     event.preventDefault();
     activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     svg.setPointerCapture(event.pointerId);
@@ -638,6 +712,12 @@ function canvasPointerDown(svg, event) {
   if (mode === 'select' && railingId) {
     selected = { kind: 'railing', id: railingId };
     message = 'Railing run selected · hosted by construction geometry';
+    render();
+    return;
+  }
+  if (mode === 'select' && levelDownSegmentId) {
+    selected = { kind: 'level-down', id: levelDownSegmentId };
+    message = 'Level Down section selected · riser applies to the entire polyline';
     render();
     return;
   }
@@ -696,6 +776,10 @@ function canvasPointerDown(svg, event) {
     drawCanvasRefresh();
     return;
   }
+  if (mode === 'level-down') {
+    placeLevelDownPoint(screenToWorld(svg, event));
+    return;
+  }
   if (mode !== 'draw') { selected = { kind: null, id: null }; render(); return; }
   placeDraftPoint(screenToWorld(svg, event));
 }
@@ -707,6 +791,35 @@ function placeDraftPoint(raw) {
   numericBuffer = '';
   message = draft.length < 3 ? 'Continue to the next corner' : 'Click the first corner or press Enter to close';
   render();
+}
+
+function placeLevelDownPoint(raw) {
+  const anchor = resolveRailingSnap(raw);
+  if (!anchor) { message = 'Choose an enabled edge, corner, or grid snap'; updateStatusMessage(); return; }
+  const boundaryAnchor = ['edge', 'vertex'].includes(anchor.snapType) && anchor.edgeKind !== 'stair-interface-edge';
+  if (!levelDownDraft.length && !boundaryAnchor) {
+    message = 'Level Down must begin on the Deck Boundary'; updateStatusMessage(); return;
+  }
+  const previous = levelDownDraft.at(-1)?.point;
+  if (previous && Math.hypot(anchor.point.x - previous.x, anchor.point.y - previous.y) < 1) return;
+  if (levelDownDraft.length && boundaryAnchor) {
+    const points = [...levelDownDraft, anchor].map((entry) => ({ x: entry.point.x, y: entry.point.y, anchor: entry }));
+    try {
+      const levelDown = createLevelDown(points, { boundaryId: boundary().id });
+      selected = { kind: 'level-down', id: levelDown.segments[0].id };
+      levelDownDraft = [];
+      levelDownPointer = null;
+      mode = 'select';
+      message = `${levelDown.segments.length} Level Down section${levelDown.segments.length === 1 ? '' : 's'} added · 7½″ riser`;
+      commit(upsertObject(documentModel, levelDown), 'Add Level Down construction polyline');
+    } catch (error) { message = error.message; render(); }
+    return;
+  }
+  levelDownDraft.push(anchor);
+  levelDownPointer = anchor;
+  message = levelDownDraft.length === 1 ? 'Start locked · add intermediate points or finish on another boundary edge' : 'Polyline point added · finish on a boundary edge';
+  drawCanvasRefresh();
+  updateStatusMessage();
 }
 
 function canvasPointerMove(svg, event) {
@@ -738,6 +851,13 @@ function canvasPointerMove(svg, event) {
     return;
   }
   const raw = screenToWorld(svg, event);
+  if (mode === 'level-down') {
+    levelDownPointer = resolveRailingSnap(raw);
+    message = levelDownPointer ? `${levelDownPointer.label}${levelDownDraft.length ? ' · click to add or finish' : ' · click to start'}` : 'Move to an enabled snap target';
+    drawCanvasRefresh();
+    updateStatusMessage();
+    return;
+  }
   if (dimensionDragStart?.pointerId === event.pointerId) {
     const dx = raw.x - dimensionDragStart.point.x;
     const dy = raw.y - dimensionDragStart.point.y;
@@ -853,7 +973,7 @@ function finishPointerGesture(svg, event) {
     } else if (gesture.moved) {
       message = 'Dimension label repositioned';
       commit(finalDocument, 'Move dimension annotation');
-    }
+    } else render();
     return;
   }
   if (railingGesture?.pointerId === event.pointerId) {
@@ -956,6 +1076,7 @@ function finishPointerGesture(svg, event) {
 function isVertexReferencedByAttachment(vertexId) {
   if (documentModel.objects.some((object) => object.type === 'stair' && Object.values(object.anchors ?? {}).includes(vertexId))) return true;
   if (documentModel.objects.some((object) => object.type === 'railing-run' && [object.anchors?.start?.vertexId, object.anchors?.end?.vertexId].includes(vertexId))) return true;
+  if (documentModel.objects.some((object) => object.type === 'level-down' && object.vertices?.some((vertex) => vertex.anchor?.vertexId === vertexId))) return true;
   const current = boundary();
   const vertexIndex = current?.vertices.findIndex((vertex) => vertex.id === vertexId) ?? -1;
   if (vertexIndex < 0) return false;
@@ -1054,6 +1175,15 @@ function breakSelectedEdge(segmentCount) {
   commitBoundary(divided, `Divide construction edge into ${segmentCount} segments`);
 }
 
+function breakSelectedLevelDown(segmentCount) {
+  if (selected.kind !== 'level-down') return;
+  const reference = findLevelDownSegment(selected.id);
+  if (!reference) return;
+  const divided = splitLevelDownSegment(reference.levelDown, selected.id, segmentCount);
+  message = `Level Down section divided into ${segmentCount} equal sections`;
+  commit(upsertObject(documentModel, divided), `Divide Level Down section into ${segmentCount}`);
+}
+
 function resolveRailingSnap(raw) {
   const layer = getRailingLayer(documentModel);
   const current = boundary();
@@ -1135,6 +1265,12 @@ function canvasDoubleClick(svg, event) {
 function editDimensionReference(referenceId) {
   const reference = resolveDimensionReference(referenceId);
   if (!reference) return;
+  if (reference.kind === 'area') {
+    selected = { kind: 'dimension', id: referenceId };
+    message = 'Deck area selected · choose a construction action';
+    render();
+    return;
+  }
   if (reference.kind === 'railing') {
     selected = { kind: 'railing', id: reference.railing.id };
     message = 'Railing measurement selected · drag a new run to change its extents';
@@ -1202,6 +1338,14 @@ function handleAction(action) {
   if (action === 'toggle-selected-dimension' && ['edge', 'stair-edge', 'dimension'].includes(selected.kind)) toggleSelectedDimension();
   if (action === 'break-edge-2') breakSelectedEdge(2);
   if (action === 'break-edge-3') breakSelectedEdge(3);
+  if (action === 'quick-house-attachment' && selected.kind === 'edge') {
+    const edge = boundary().edges.find((entry) => entry.id === selected.id);
+    if (edge) {
+      const role = edge.role === 'house' ? 'open' : 'house';
+      message = role === 'house' ? 'House attachment assigned' : 'House attachment removed';
+      commitBoundary(markBoundaryEdited(setEdgeRole(boundary(), selected.id, role)), 'Toggle House Attachment relationship');
+    }
+  }
   if (action === 'quick-fascia' && ['edge', 'stair-edge'].includes(selected.kind)) {
     const edge = selected.kind === 'edge' ? boundary().edges.find((entry) => entry.id === selected.id) : findStairInterfaceByEdgeId(selected.id)?.edge;
     if (edge) { message = 'Fascia property updated'; commitSelectedEdgeProperties({ finishes: { fascia: !normalizeBoundaryEdge(edge).properties.finishes.fascia } }, 'Toggle edge fascia'); }
@@ -1273,6 +1417,44 @@ function handleAction(action) {
     render();
   }
   if (action === 'cancel-stair') { stairGesture = null; stairDraft = null; mode = 'select'; message = 'Stair placement canceled'; render(); }
+  if (action === 'make-boundary-90') {
+    try {
+      message = 'Boundary aligned to horizontal and vertical construction planes';
+      commitBoundary(markBoundaryEdited(orthogonalizeBoundary(boundary())), 'Make Deck Boundary corners 90 degrees');
+    } catch (error) { message = error.message; render(); }
+  }
+  if (action === 'start-level-down') {
+    mode = 'level-down'; levelDownDraft = []; levelDownPointer = null;
+    message = 'Click a boundary edge or corner to start Level Down';
+    render();
+  }
+  if (action === 'cancel-level-down') {
+    mode = 'select'; levelDownDraft = []; levelDownPointer = null;
+    message = 'Level Down canceled';
+    render();
+  }
+  if (action === 'apply-level-down-riser' && selected.kind === 'level-down') {
+    const reference = findLevelDownSegment(selected.id);
+    const height = parseConstructionLength(app.querySelector('#quick-level-down-riser')?.value);
+    if (!reference || height === null) { message = 'Enter a valid riser height'; render(); }
+    else {
+      try {
+        message = `${formatFeetInches(height)} riser applied to the entire Level Down`;
+        commit(upsertObject(documentModel, setLevelDownRiserHeight(reference.levelDown, height)), 'Set Level Down riser height');
+      } catch (error) { message = error.message; render(); }
+    }
+  }
+  if (action === 'break-level-down-2') breakSelectedLevelDown(2);
+  if (action === 'break-level-down-3') breakSelectedLevelDown(3);
+  if (action === 'delete-level-down' && selected.kind === 'level-down') {
+    const reference = findLevelDownSegment(selected.id);
+    if (reference) {
+      const next = { ...documentModel, objects: documentModel.objects.filter((object) => object.id !== reference.levelDown.id) };
+      selected = { kind: null, id: null };
+      message = 'Level Down removed · Railing remains unchanged';
+      commit(next, 'Remove Level Down construction polyline');
+    }
+  }
   if (action === 'toggle-dimensions') {
     const visible = !getDimensionLayer(documentModel).visible;
     message = `Dimensions layer ${visible ? 'shown' : 'hidden'}`;
@@ -1291,7 +1473,7 @@ function handleAction(action) {
     else { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }
   }
   if (action === 'new-boundary') {
-    const next = { ...documentModel, objects: documentModel.objects.filter((object) => !['deck-boundary', 'stair', 'railing-run'].includes(object.type)) };
+    const next = { ...documentModel, objects: documentModel.objects.filter((object) => !['deck-boundary', 'stair', 'railing-run', 'level-down'].includes(object.type)) };
     commit(next, 'Remove deck boundary'); selected = { kind: null, id: null }; mode = 'select'; message = 'Ready for a new boundary';
   }
   if (action === 'export') exportProject();
@@ -1433,6 +1615,20 @@ window.addEventListener('keydown', (event) => {
     else mode = 'select';
     pointerWorld = draft.at(-1) ?? null;
     message = mode === 'draw' ? 'Last sketch step canceled' : 'Drawing canceled'; render();
+  }
+  if (event.key === 'Escape' && mode === 'level-down') {
+    event.preventDefault();
+    if (levelDownDraft.length) levelDownDraft.pop();
+    else mode = 'select';
+    levelDownPointer = levelDownDraft.at(-1) ?? null;
+    message = mode === 'level-down' ? 'Last Level Down point canceled' : 'Level Down canceled';
+    render();
+  }
+  if (event.key === 'Backspace' && mode === 'level-down' && !editingField) {
+    event.preventDefault();
+    levelDownDraft.pop(); levelDownPointer = levelDownDraft.at(-1) ?? null;
+    message = levelDownDraft.length ? 'Last Level Down point removed' : 'Choose a boundary edge to restart';
+    render();
   }
   if ((event.key === 'Delete' || event.key === 'Backspace') && selected.kind === 'vertex') handleAction('delete-vertex');
 });

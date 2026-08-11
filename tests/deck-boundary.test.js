@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDeckBoundary, insertVertex, removeVertex, setEdgeRole, splitEdgeIntoSegments, updateVertex, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
+import { createDeckBoundary, getBoundaryCentroid, insertVertex, orthogonalizeBoundary, removeVertex, setEdgeRole, splitEdgeIntoSegments, updateVertex, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
 
 function ids() {
   let counter = 0;
@@ -63,4 +63,21 @@ test('rejects crossing and undersized construction boundaries', () => {
   assert.ok(validateDeckBoundary(crossing).issues.some((issue) => issue.code === 'self-intersection'));
   const short = createDeckBoundary([{ x: 0, y: 0 }, { x: 5, y: 0 }, { x: 5, y: 20 }, { x: 0, y: 20 }], { idFactory: ids() });
   assert.ok(validateDeckBoundary(short).issues.some((issue) => issue.code === 'short-edge'));
+});
+
+test('computes the visual center of the deck area', () => {
+  assert.deepEqual(getBoundaryCentroid(rectangle()), { x: 96, y: 72 });
+});
+
+test('aligns a near-orthogonal boundary while preserving construction identities', () => {
+  const source = createDeckBoundary([{ x: 0, y: 2 }, { x: 192, y: 0 }, { x: 194, y: 144 }, { x: -1, y: 146 }], { idFactory: ids() });
+  const aligned = orthogonalizeBoundary(source);
+  assert.deepEqual(aligned.vertices.map((vertex) => vertex.id), source.vertices.map((vertex) => vertex.id));
+  assert.deepEqual(aligned.edges.map((edge) => edge.id), source.edges.map((edge) => edge.id));
+  assert.ok(aligned.edges.every((edge, index) => {
+    const start = aligned.vertices[index];
+    const end = aligned.vertices[(index + 1) % aligned.vertices.length];
+    return Math.abs(start.x - end.x) < 1e-8 || Math.abs(start.y - end.y) < 1e-8;
+  }));
+  assert.equal(validateDeckBoundary(aligned).valid, true);
 });

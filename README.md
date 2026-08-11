@@ -16,6 +16,10 @@ Sprint 2 promotes every boundary segment into a typed construction edge with edi
 
 Single-click selection opens a temporary sticky object-actions panel at the top of the inspector. Railing actions include deletion, Decking visibility, safe panel-count adjustment, and a structured Wild Hog or Trex system assignment ready for future costing. Construction-edge actions include individual dimension visibility, Fascia and Picture Frame intent, and equal division into two or three property-preserving segments. Corners, dimensions, stairs, and stair interfaces expose their most useful safe actions through the same pattern.
 
+Deck Boundary now presents its computed surface area as a centered, selectable Dimension annotation. The annotation can be dragged, hidden independently, or used as the entry point for whole-boundary operations such as aligning near-orthogonal edges to horizontal and vertical construction planes. House Attachment is available directly in the selected-edge quick actions and remains an edge-owned construction relationship.
+
+**Level Down** introduces an independent, serializable construction polyline for changes in deck elevation. A run begins and ends on Deck Boundary geometry, may contain intermediate snapped points, and owns one shared riser height (7.5 inches by default). Any selected section can be divided into two or three equal sections without changing the owning Level Down or its riser. Multiple Level Down objects can coexist, and their operations intentionally do not regenerate or move Railing posts.
+
 ## Run the workspace
 
 Use `npm start`, then open `http://localhost:4173`. The workspace stores the active project locally in the browser and can export a portable `.cme.json` project file.
