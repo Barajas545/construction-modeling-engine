@@ -38,6 +38,38 @@ export function projectPointToEdge(start, end, point) {
   return { t, point: { x: start.x + dx * t, y: start.y + dy * t } };
 }
 
+export function resolveRailingEndpointSnap(point, targets = {}, options = {}) {
+  const tolerance = options.tolerance ?? 12;
+  if (options.edges !== false) {
+    const vertex = (targets.vertices ?? [])
+      .map((target) => ({ target, distance: distance(point, target.point) }))
+      .filter((candidate) => candidate.distance <= tolerance)
+      .sort((a, b) => a.distance - b.distance)[0]?.target;
+    if (vertex) return { snapType: 'vertex', ...vertex, point: { ...vertex.point }, label: vertex.label ?? 'Corner snap' };
+    const edge = (targets.edges ?? [])
+      .map((target) => {
+        const projection = projectPointToEdge(target.start, target.end, point);
+        return { target, projection, distance: distance(point, projection.point) };
+      })
+      .filter((candidate) => candidate.distance <= tolerance)
+      .sort((a, b) => a.distance - b.distance)[0];
+    if (edge) {
+      const { start, end, ...reference } = edge.target;
+      return { snapType: 'edge', ...reference, t: edge.projection.t, point: edge.projection.point, label: reference.label ?? 'Edge snap' };
+    }
+  }
+  if (options.grid !== false) {
+    const spacing = options.gridSpacing ?? .5;
+    return {
+      snapType: 'grid',
+      point: { x: Math.round(point.x / spacing) * spacing, y: Math.round(point.y / spacing) * spacing },
+      spacing,
+      label: 'Grid snap',
+    };
+  }
+  return null;
+}
+
 export function createRailingRun(host, startT, endT, options = {}, idFactory = defaultId) {
   if (!host?.edgeId || !host?.boundaryId) throw new Error('Railing requires a construction edge host.');
   const first = Math.max(0, Math.min(1, Number(startT)));
@@ -55,6 +87,39 @@ export function createRailingRun(host, startT, endT, options = {}, idFactory = d
       postWidth: options.postWidth ?? DEFAULT_POST_WIDTH,
     },
     lifecycle: { phase: 'established', revision: 1 },
+  };
+}
+
+export function createRailingLine(startAnchor, endAnchor, options = {}, idFactory = defaultId) {
+  if (!startAnchor?.point || !endAnchor?.point) throw new Error('Railing endpoints require active snap references.');
+  if (distance(startAnchor.point, endAnchor.point) < 1e-6) throw new Error('Railing endpoints must be different.');
+  return {
+    type: RAILING_TYPE,
+    schemaVersion: RAILING_SCHEMA_VERSION,
+    id: idFactory('railing'),
+    name: options.name ?? 'Railing run',
+    anchors: { start: startAnchor, end: endAnchor },
+    settings: {
+      maxClearSpan: options.maxClearSpan ?? DEFAULT_MAX_CLEAR_SPAN,
+      postWidth: options.postWidth ?? DEFAULT_POST_WIDTH,
+    },
+    lifecycle: { phase: 'established', revision: 1 },
+  };
+}
+
+export function deriveRailingLineGeometry(railing, start, end) {
+  if (!start || !end) return null;
+  const layout = computeRailingLayout(distance(start, end), railing.settings);
+  return {
+    railing,
+    start,
+    end,
+    ...layout,
+    posts: layout.posts.map((post) => ({
+      t: post.t,
+      x: start.x + (end.x - start.x) * post.t,
+      y: start.y + (end.y - start.y) * post.t,
+    })),
   };
 }
 

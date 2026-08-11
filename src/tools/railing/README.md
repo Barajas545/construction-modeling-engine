@@ -1,6 +1,6 @@
 # Railing
 
-Railing is an edge-hosted construction object created by pressing and dragging along a Deck Boundary edge or Deck–Stair interface edge. The run stores normalized start and end positions rather than copied geometry, so it follows ordinary host-edge edits.
+Railing is a snap-anchored construction object created by pressing an edge, corner, or grid point and dragging freely to another active snap target. A run may cross inside or outside the Deck Boundary. Edge anchors retain normalized host references; grid anchors retain exact project coordinates.
 
 `railing.js` owns the construction rules and serializable object contract:
 
@@ -11,4 +11,6 @@ Railing is an edge-hosted construction object created by pressing and dragging a
 - exterior corner classification by default;
 - geometry and quantities only, without pricing.
 
-The UI derives the current run geometry from the host edge on every render. Topology changes that would split or remove a hosted edge are currently blocked until dependency-aware repartitioning is implemented.
+The UI resolves both anchors on every render and derives the current run geometry between them. Topology changes that would split or remove referenced construction geometry are currently blocked until dependency-aware repartitioning is implemented.
+
+Railing visibility is independent from the Dimensions layer. Edge/corner and grid snaps can be enabled separately, with construction geometry taking priority when both are active.

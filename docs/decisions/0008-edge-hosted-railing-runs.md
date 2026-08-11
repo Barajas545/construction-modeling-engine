@@ -1,6 +1,6 @@
 # ADR 0008: Edge-hosted railing runs
 
-Status: Accepted
+Status: Superseded in part by ADR 0009
 
 ## Context
 

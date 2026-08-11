@@ -2,6 +2,7 @@ import { createProjectDocument, parseProject, serializeProject, setProjectWorkfl
 import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
 import { getDimensionLayer, getDimensionOffset, setDimensionLayerVisibility, setDimensionOffset } from '../core/annotations/dimension-layer.js';
+import { getRailingLayer, setRailingLayerVisibility, setRailingSnapSettings } from '../core/annotations/railing-layer.js';
 import { collectSnapTargets, resolveSnap } from '../core/geometry/snap-engine.js';
 import { nearestPointOnSegment } from '../core/geometry/vector.js';
 import { formatFeetInches, formatSquareFeet } from '../core/units/length.js';
@@ -10,7 +11,7 @@ import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, removeVertex, setEdgeLength, setEdgeRole, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
-import { analyzeRailingGeometries, createRailingRun, deriveRailingGeometry, projectPointToEdge } from '../tools/railing/railing.js';
+import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap } from '../tools/railing/railing.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'cme.project.v1';
@@ -119,7 +120,7 @@ function render() {
           <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span></div><small>Release to build · 7.5″ max rise · 11″ max tread</small></div>
           <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
         </section>
-        <aside class="inspector open">${renderProgress(progress, current)}${renderInspector(current, validation)}${renderGridControls()}</aside>
+        <aside class="inspector open">${renderProgress(progress, current)}${renderInspector(current, validation)}${renderLayerAndSnapControls()}</aside>
       </section>
     </main>`;
   bindEvents();
@@ -135,6 +136,12 @@ function renderProgress(progress, current) {
 function renderGridControls() {
   const dimensionsVisible = getDimensionLayer(documentModel).visible;
   return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Annotation layers can be hidden without changing the construction model.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label></section><section class="inspector-section"><div class="eyebrow">Workspace</div><h2>Construction grid</h2><p class="section-copy">Grid density adapts as you navigate. Choose a fixed field increment when needed.</p><div class="field-grid"><div class="field full"><label for="grid-spacing">Snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><label class="toggle-row"><input id="grid-visible" type="checkbox" ${gridVisible ? 'checked' : ''}><span>Show construction grid</span></label><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
+}
+
+function renderLayerAndSnapControls() {
+  const dimensionsVisible = getDimensionLayer(documentModel).visible;
+  const railingLayer = getRailingLayer(documentModel);
+  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label></section><section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Construction geometry takes priority over the grid. Disable either source when a different placement is needed.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${railingLayer.snap.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${railingLayer.snap.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><label class="toggle-row"><input id="grid-visible" type="checkbox" ${gridVisible ? 'checked' : ''}><span>Show construction grid</span></label><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
 }
 
 function renderInspector(current, validation) {
@@ -163,7 +170,7 @@ function renderInspector(current, validation) {
 
 function renderRailingInspector(geometry) {
   const project = analyzeRailingGeometries(getAllRailingGeometries());
-  return `<section class="inspector-section railing-panel"><div class="object-status"><div><div class="eyebrow">Railing construction object</div><h2>${escapeHtml(geometry.railing.name)}</h2></div><span class="object-badge established">Edge hosted</span></div><p class="section-copy">This run remains attached to its construction edge as the project geometry evolves.</p><div class="metric-grid"><div class="metric"><div class="metric-label">Run length</div><div class="metric-value">${formatFeetInches(geometry.length)}</div></div><div class="metric"><div class="metric-label">Sections</div><div class="metric-value">${geometry.sectionCount}</div></div><div class="metric"><div class="metric-label">Clear span</div><div class="metric-value">${formatFeetInches(geometry.clearSpan)}</div></div><div class="metric"><div class="metric-label">Run posts</div><div class="metric-value">${geometry.postCount}</div></div></div><div class="validation"><span class="validation-dot"></span><span>Equal sections keep every clear span at or below 6 ft. Exterior corners are the project default.</span></div><div class="hint-card">Project railing: ${formatFeetInches(project.totalLength)} · ${project.sectionCount} sections · ${project.estimatedPostCount} estimated posts.</div><div class="action-stack"><button class="button danger" data-action="remove-railing">Remove railing run</button></div></section>`;
+  return `<section class="inspector-section railing-panel"><div class="object-status"><div><div class="eyebrow">Railing construction object</div><h2>${escapeHtml(geometry.railing.name)}</h2></div><span class="object-badge established">Snap anchored</span></div><p class="section-copy">This run may cross inside or outside the deck. Each endpoint retains its edge, corner, or grid snap reference.</p><div class="metric-grid"><div class="metric"><div class="metric-label">Run length</div><div class="metric-value">${formatFeetInches(geometry.length)}</div></div><div class="metric"><div class="metric-label">Sections</div><div class="metric-value">${geometry.sectionCount}</div></div><div class="metric"><div class="metric-label">Clear span</div><div class="metric-value">${formatFeetInches(geometry.clearSpan)}</div></div><div class="metric"><div class="metric-label">Run posts</div><div class="metric-value">${geometry.postCount}</div></div></div><div class="validation"><span class="validation-dot"></span><span>Equal sections keep every clear span at or below 6 ft. Exterior corners are the project default.</span></div><div class="hint-card">Project railing: ${formatFeetInches(project.totalLength)} · ${project.sectionCount} sections · ${project.estimatedPostCount} estimated posts.</div><div class="action-stack"><button class="button danger" data-action="remove-railing">Remove railing run</button></div></section>`;
 }
 
 function renderStairInterfaceInspector(current, stair, edge) {
@@ -217,8 +224,29 @@ function resolveRailingHostByEdgeId(edgeId, edgeKind = null) {
 function findRailingGeometry(railingId) {
   const railing = documentModel.objects.find((object) => object.type === 'railing-run' && object.id === railingId);
   if (!railing) return null;
+  if (railing.anchors?.start && railing.anchors?.end) {
+    const start = resolveRailingAnchor(railing.anchors.start);
+    const end = resolveRailingAnchor(railing.anchors.end);
+    return start && end ? deriveRailingLineGeometry(railing, start, end) : null;
+  }
   const reference = resolveRailingHostByEdgeId(railing.host.edgeId, railing.host.edgeKind);
   return reference?.start && reference?.end ? deriveRailingGeometry(railing, reference.start, reference.end) : null;
+}
+
+function resolveRailingAnchor(anchor) {
+  const current = boundary();
+  if (!current) return anchor.point ?? null;
+  if (anchor.snapType === 'vertex') return current.vertices.find((vertex) => vertex.id === anchor.vertexId) ?? anchor.point;
+  if (anchor.snapType === 'edge') {
+    const reference = resolveRailingHostByEdgeId(anchor.edgeId, anchor.edgeKind);
+    if (reference?.start && reference?.end) {
+      return {
+        x: reference.start.x + (reference.end.x - reference.start.x) * anchor.t,
+        y: reference.start.y + (reference.end.y - reference.start.y) * anchor.t,
+      };
+    }
+  }
+  return anchor.point ?? null;
 }
 
 function getAllRailingGeometries() {
@@ -329,8 +357,21 @@ function renderStairInterfaceEdge(svg, current, stair, byId) {
 }
 
 function renderRailingGraphics(svg) {
+  if (!getRailingLayer(documentModel).visible && !railingDraft) return;
   getAllRailingGeometries().forEach((geometry) => renderRailingGeometry(svg, geometry, false));
   if (railingDraft?.geometry) renderRailingGeometry(svg, railingDraft.geometry, true);
+  [railingDraft?.startAnchor, railingDraft?.endAnchor].filter(Boolean).forEach((anchor, index) => {
+    const size = Math.max(7, viewport.width / 95);
+    svg.append(svgElement('rect', {
+      x: anchor.point.x - size / 2,
+      y: anchor.point.y - size / 2,
+      width: size,
+      height: size,
+      rx: size * .18,
+      class: `railing-snap-marker ${anchor.snapType} ${index === 0 ? 'start' : 'end'}`,
+      transform: `rotate(45 ${anchor.point.x} ${anchor.point.y})`,
+    }));
+  });
 }
 
 function renderRailingGeometry(svg, geometry, preview) {
@@ -387,7 +428,7 @@ function renderEdgeConstructionGraphics(svg, current, start, end, properties) {
   if (properties.existingConditions.demolition) {
     svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'demolition-edge' }));
   }
-  if (properties.safety.railing === 'required' || properties.safety.railing === 'existing') {
+  if (getRailingLayer(documentModel).visible && (properties.safety.railing === 'required' || properties.safety.railing === 'existing')) {
     const postCount = Math.max(2, Math.ceil(length / 48) + 1);
     for (let index = 0; index < postCount; index += 1) {
       const t = index / (postCount - 1);
@@ -454,6 +495,21 @@ function bindEvents() {
     message = `Dimensions layer ${dimensionVisibility.checked ? 'shown' : 'hidden'}`;
     commit(setDimensionLayerVisibility(documentModel, dimensionVisibility.checked), 'Toggle Dimensions layer');
   });
+  const railingVisibility = app.querySelector('#railing-visible');
+  if (railingVisibility) railingVisibility.addEventListener('change', () => {
+    message = `Railing layer ${railingVisibility.checked ? 'shown' : 'hidden'}`;
+    commit(setRailingLayerVisibility(documentModel, railingVisibility.checked), 'Toggle Railing layer');
+  });
+  const edgeSnap = app.querySelector('#snap-edges');
+  if (edgeSnap) edgeSnap.addEventListener('change', () => {
+    message = `Edge and corner snap ${edgeSnap.checked ? 'enabled' : 'disabled'}`;
+    commit(setRailingSnapSettings(documentModel, { edges: edgeSnap.checked }), 'Update Railing snap settings');
+  });
+  const gridSnap = app.querySelector('#snap-grid');
+  if (gridSnap) gridSnap.addEventListener('change', () => {
+    message = `Grid snap ${gridSnap.checked ? 'enabled' : 'disabled'}`;
+    commit(setRailingSnapSettings(documentModel, { grid: gridSnap.checked }), 'Update Railing snap settings');
+  });
   const svg = app.querySelector('.model-canvas');
   svg.addEventListener('pointerdown', (event) => canvasPointerDown(svg, event));
   svg.addEventListener('pointermove', (event) => canvasPointerMove(svg, event));
@@ -474,7 +530,13 @@ function setMode(nextMode) {
   if (mode !== 'draw') { draft = []; pointerWorld = null; message = 'Ready'; }
   if (mode === 'draw') message = 'Click the first corner of the deck';
   if (mode === 'stair') message = 'Press a boundary edge and drag outward to build stairs';
-  if (mode === 'railing') message = 'Press a Deck Boundary or stair interface edge and drag along it';
+  if (mode === 'railing') {
+    if (!getRailingLayer(documentModel).visible) {
+      documentModel = setRailingLayerVisibility(documentModel, true);
+      persist();
+    }
+    message = 'Press an edge, corner, or grid point and drag to another snap target';
+  }
   render();
 }
 
@@ -484,7 +546,7 @@ function canvasPointerDown(svg, event) {
   const stairEdgeId = event.target.dataset.stairEdgeId;
   const dimensionId = event.target.dataset.dimensionId;
   const railingId = event.target.dataset.railingId;
-  if (event.pointerType === 'touch' && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || dimensionId || railingId)) || (mode === 'stair' && edgeId) || (mode === 'railing' && (edgeId || stairEdgeId)))) {
+  if (event.pointerType === 'touch' && mode !== 'railing' && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || dimensionId || railingId)) || (mode === 'stair' && edgeId))) {
     event.preventDefault();
     activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     svg.setPointerCapture(event.pointerId);
@@ -570,13 +632,16 @@ function canvasPointerDown(svg, event) {
     drawCanvasRefresh();
     return;
   }
-  if (mode === 'railing' && (edgeId || stairEdgeId)) {
-    const reference = resolveRailingHostByEdgeId(stairEdgeId || edgeId, stairEdgeId ? 'stair-interface-edge' : 'boundary-edge');
-    if (!reference?.start || !reference?.end) return;
-    const projection = projectPointToEdge(reference.start, reference.end, screenToWorld(svg, event));
-    railingGesture = { pointerId: event.pointerId, reference, startT: projection.t };
-    railingDraft = { startT: projection.t, endT: projection.t, geometry: null };
-    message = 'Drag along the construction edge · posts update in real time';
+  if (mode === 'railing') {
+    const startAnchor = resolveRailingSnap(screenToWorld(svg, event));
+    if (!startAnchor) {
+      message = 'Enable Edge or Grid snap, then begin on an active snap target';
+      updateStatusMessage();
+      return;
+    }
+    railingGesture = { pointerId: event.pointerId, startAnchor };
+    railingDraft = { startAnchor, endAnchor: null, geometry: null };
+    message = `${startAnchor.label} locked · drag to another snap target`;
     svg.setPointerCapture(event.pointerId);
     svg.classList.add('railing');
     drawCanvasRefresh();
@@ -635,18 +700,24 @@ function canvasPointerMove(svg, event) {
     return;
   }
   if (railingGesture?.pointerId === event.pointerId) {
-    const projection = projectPointToEdge(railingGesture.reference.start, railingGesture.reference.end, raw);
+    const endAnchor = resolveRailingSnap(raw);
+    if (!endAnchor) {
+      railingDraft = { startAnchor: railingGesture.startAnchor, endAnchor: null, geometry: null };
+      message = 'Move to an enabled edge, corner, or grid snap';
+      drawCanvasRefresh();
+      updateStatusMessage();
+      return;
+    }
     const temporary = {
       type: 'railing-run',
       id: 'railing-preview',
       name: 'Railing preview',
-      host: railingGesture.reference.host,
-      anchors: { startT: railingGesture.startT, endT: projection.t },
+      anchors: { start: railingGesture.startAnchor, end: endAnchor },
       settings: { maxClearSpan: 72, postWidth: 3.5 },
     };
-    const geometry = deriveRailingGeometry(temporary, railingGesture.reference.start, railingGesture.reference.end);
-    railingDraft = { startT: railingGesture.startT, endT: projection.t, geometry };
-    message = `${formatFeetInches(geometry.length)} railing · ${geometry.sectionCount} equal section${geometry.sectionCount === 1 ? '' : 's'} · ${geometry.postCount} posts`;
+    const geometry = deriveRailingLineGeometry(temporary, railingGesture.startAnchor.point, endAnchor.point);
+    railingDraft = { startAnchor: railingGesture.startAnchor, endAnchor, geometry };
+    message = `${formatFeetInches(geometry.length)} · ${geometry.sectionCount} sections · ${endAnchor.label}`;
     drawCanvasRefresh();
     updateStatusMessage();
     return;
@@ -748,9 +819,8 @@ function finishPointerGesture(svg, event) {
       return;
     }
     try {
-      const railing = createRailingRun(gesture.reference.host, draftRun.startT, draftRun.endT);
+      const railing = createRailingLine(draftRun.startAnchor, draftRun.endAnchor);
       let next = upsertObject(documentModel, railing);
-      next = updateRailingHostAttachment(next, railing, true);
       selected = { kind: 'railing', id: railing.id };
       mode = 'select';
       message = `${formatFeetInches(draftRun.geometry.length)} railing · ${draftRun.geometry.sectionCount} sections added`;
@@ -836,11 +906,12 @@ function finishPointerGesture(svg, event) {
 
 function isVertexReferencedByAttachment(vertexId) {
   if (documentModel.objects.some((object) => object.type === 'stair' && Object.values(object.anchors ?? {}).includes(vertexId))) return true;
+  if (documentModel.objects.some((object) => object.type === 'railing-run' && [object.anchors?.start?.vertexId, object.anchors?.end?.vertexId].includes(vertexId))) return true;
   const current = boundary();
   const vertexIndex = current?.vertices.findIndex((vertex) => vertex.id === vertexId) ?? -1;
   if (vertexIndex < 0) return false;
   const adjacentEdgeIds = new Set([current.edges[vertexIndex]?.id, current.edges[(vertexIndex - 1 + current.edges.length) % current.edges.length]?.id]);
-  return documentModel.objects.some((object) => object.type === 'railing-run' && adjacentEdgeIds.has(object.host.edgeId));
+  return documentModel.objects.some((object) => object.type === 'railing-run' && [object.host?.edgeId, object.anchors?.start?.edgeId, object.anchors?.end?.edgeId].some((edgeId) => adjacentEdgeIds.has(edgeId)));
 }
 
 function remapEdgeReferences(document, removedEdgeId, survivingEdgeId) {
@@ -870,6 +941,7 @@ function commitSelectedEdgeProperties(patch, label) {
 
 function updateRailingHostAttachment(document, railing, attach) {
   const host = railing.host;
+  if (!host) return document;
   if (host.edgeKind === 'stair-interface-edge') {
     const stair = document.objects.find((object) => object.type === 'stair' && object.id === host.ownerId);
     if (!stair) return document;
@@ -886,6 +958,11 @@ function updateRailingHostAttachment(document, railing, attach) {
   return upsertObject(document, markBoundaryEdited(updateEdgeProperties(current, host.edgeId, { attachments: { railingIds } })));
 }
 
+function edgeHasRailingDependency(edgeId) {
+  return documentModel.objects.some((object) => object.type === 'railing-run'
+    && [object.host?.edgeId, object.anchors?.start?.edgeId, object.anchors?.end?.edgeId].includes(edgeId));
+}
+
 function removeSelectedRailing() {
   const railing = documentModel.objects.find((object) => object.type === 'railing-run' && object.id === selected.id);
   if (!railing) return;
@@ -894,6 +971,31 @@ function removeSelectedRailing() {
   selected = { kind: null, id: null };
   message = 'Railing run removed';
   commit(next, 'Remove railing run');
+}
+
+function resolveRailingSnap(raw) {
+  const layer = getRailingLayer(documentModel);
+  const current = boundary();
+  const tolerance = viewport.width / Math.max(app.querySelector('.model-canvas')?.clientWidth ?? 1000, 1) * 16;
+  const targets = { vertices: [], edges: [] };
+  if (current) {
+    targets.vertices = current.vertices.map((vertex) => ({ boundaryId: current.id, vertexId: vertex.id, point: { x: vertex.x, y: vertex.y } }));
+    targets.edges = current.edges.map((edge) => {
+      const reference = resolveRailingHostByEdgeId(edge.id, 'boundary-edge');
+      return { boundaryId: current.id, edgeId: edge.id, edgeKind: 'boundary-edge', start: reference.start, end: reference.end };
+    });
+    documentModel.objects.filter((object) => object.type === 'stair').forEach((stair) => {
+      const edge = getStairInterfaceEdge(stair);
+      const reference = resolveRailingHostByEdgeId(edge.id, 'stair-interface-edge');
+      if (reference?.start && reference?.end) targets.edges.push({ boundaryId: current.id, edgeId: edge.id, edgeKind: 'stair-interface-edge', ownerId: stair.id, start: reference.start, end: reference.end, label: 'Stair interface snap' });
+    });
+  }
+  return resolveRailingEndpointSnap(raw, targets, {
+    tolerance,
+    edges: layer.snap.edges,
+    grid: layer.snap.grid,
+    gridSpacing: gridSetting === 'auto' ? .5 : Number(gridSetting),
+  });
 }
 
 function snapForPointer(raw, anchor, extraVertices = [], excludedIds = new Set()) {
@@ -981,7 +1083,7 @@ function edgeDoubleClick(svg, event) {
   if (mode !== 'select' || !event.target.dataset.edgeId) return;
   const current = boundary();
   const edgeId = event.target.dataset.edgeId;
-  if ((normalizeBoundaryEdge(current.edges.find((edge) => edge.id === edgeId)).properties.attachments.railingIds ?? []).length) {
+  if (edgeHasRailingDependency(edgeId)) {
     message = 'Remove the hosted railing before splitting this construction edge';
     render();
     return;
@@ -1046,7 +1148,7 @@ function handleAction(action) {
   if (action === 'insert-midpoint' && selected.kind === 'edge') {
     const current = boundary();
     const edgeIndex = current.edges.findIndex((edge) => edge.id === selected.id);
-    if ((normalizeBoundaryEdge(current.edges[edgeIndex]).properties.attachments.railingIds ?? []).length) {
+    if (edgeHasRailingDependency(selected.id)) {
       message = 'Remove the hosted railing before splitting this construction edge';
       render();
       return;
@@ -1085,7 +1187,7 @@ function handleAction(action) {
     else { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }
   }
   if (action === 'new-boundary') {
-    const next = { ...documentModel, objects: documentModel.objects.filter((object) => object.type !== 'deck-boundary') };
+    const next = { ...documentModel, objects: documentModel.objects.filter((object) => !['deck-boundary', 'stair', 'railing-run'].includes(object.type)) };
     commit(next, 'Remove deck boundary'); selected = { kind: null, id: null }; mode = 'select'; message = 'Ready for a new boundary';
   }
   if (action === 'export') exportProject();
@@ -1195,8 +1297,23 @@ function repeatLastSegment() {
 
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
+  const editingField = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
   if (modifier && event.key.toLowerCase() === 'z') { event.preventDefault(); handleAction(event.shiftKey ? 'redo' : 'undo'); }
   if (modifier && event.key.toLowerCase() === 'y') { event.preventDefault(); handleAction('redo'); }
+  if (!modifier && !editingField && mode !== 'draw' && event.key.toLowerCase() === 'e') {
+    event.preventDefault();
+    const enabled = !getRailingLayer(documentModel).snap.edges;
+    message = `Edge and corner snap ${enabled ? 'enabled' : 'disabled'}`;
+    commit(setRailingSnapSettings(documentModel, { edges: enabled }), 'Toggle edge snap');
+    return;
+  }
+  if (!modifier && !editingField && mode !== 'draw' && event.key.toLowerCase() === 'g') {
+    event.preventDefault();
+    const enabled = !getRailingLayer(documentModel).snap.grid;
+    message = `Grid snap ${enabled ? 'enabled' : 'disabled'}`;
+    commit(setRailingSnapSettings(documentModel, { grid: enabled }), 'Toggle grid snap');
+    return;
+  }
   if (mode === 'draw' && !modifier && /^[0-9a-z.'"\-]$/i.test(event.key)) {
     if (event.key.toLowerCase() === 'r' && !numericBuffer) { event.preventDefault(); repeatLastSegment(); return; }
     event.preventDefault(); numericBuffer += event.key; message = 'Enter an exact segment length'; updateHudFromKeyboard(); return;
