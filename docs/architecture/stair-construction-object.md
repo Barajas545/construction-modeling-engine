@@ -30,6 +30,14 @@ The Stair object owns construction dimensions and references:
 
 Individual tread lines are derived graphics, not independent stored geometry. Generated boundary edges point back to their Stair through attachment properties. The serialized dimensions retain both `riserCount` and `treadCount`; `stepCount` remains as a compatibility alias for the riser count.
 
+## Deck–Stair interface edge
+
+The line between the stair opening and the deck is stored by Stair as a typed `stair-interface-edge`. It references the two upper opening vertices but is not inserted into the ordered Deck Boundary perimeter, which would create an invalid internal chord.
+
+The interface edge is independently selectable and owns the same grouped construction-property schema as boundary edges. Fascia, Picture Frame, demolition intent, and future interface metadata therefore enrich one authoritative construction line. Existing Stair objects receive a deterministic interface-edge identity when loaded and persist it when first edited.
+
+Changing the interface dimension resizes all four Stair anchors symmetrically, preserving their IDs, run, and derived tread relationships. CME rejects the edit if the resulting Deck Boundary is invalid.
+
 ## Scope
 
 This sprint provides planning geometry. It does not certify code compliance, landing requirements, stringer design, headroom, guard requirements, or structural adequacy. Those require explicit Product Lab and jurisdiction specifications.

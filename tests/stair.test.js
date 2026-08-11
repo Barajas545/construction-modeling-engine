@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeckBoundary, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
-import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairTreads, validateStairPlacement } from '../src/tools/stairs/stair.js';
+import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../src/tools/stairs/stair.js';
 
 function ids() { let count = 0; return (prefix) => `${prefix}-${++count}`; }
 
@@ -71,4 +71,34 @@ test('generated stair edges reference their owning construction object', () => {
   const generated = result.boundary.edges.filter((edge) => edge.properties.attachments.stairId === result.stair.id);
   assert.equal(generated.length, 3);
   assert.deepEqual(result.stair.generatedEdgeIds, generated.map((edge) => edge.id));
+});
+
+test('deck-to-stair interface is a selectable construction edge with editable properties', () => {
+  const makeId = ids();
+  const boundary = createDeckBoundary([{ x: 0, y: 0 }, { x: 192, y: 0 }, { x: 192, y: 144 }, { x: 0, y: 144 }], { idFactory: makeId });
+  const result = attachStairToBoundary(boundary, boundary.edges[0].id, { width: 36, totalRise: 36, treadDepth: 10 }, makeId);
+  const interfaceEdge = getStairInterfaceEdge(result.stair);
+  const enriched = updateStairInterfaceEdgeProperties(result.stair, { finishes: { fascia: true, pictureFrame: true } });
+
+  assert.equal(interfaceEdge.type, 'stair-interface-edge');
+  assert.equal(interfaceEdge.startVertexId, result.stair.anchors.openingStartVertexId);
+  assert.equal(interfaceEdge.endVertexId, result.stair.anchors.openingEndVertexId);
+  assert.equal(enriched.interfaceEdge.id, interfaceEdge.id);
+  assert.equal(enriched.interfaceEdge.properties.finishes.fascia, true);
+  assert.equal(enriched.interfaceEdge.properties.finishes.pictureFrame, true);
+});
+
+test('exact stair interface width resizes all four stair anchors without replacing their identities', () => {
+  const makeId = ids();
+  const boundary = createDeckBoundary([{ x: 0, y: 0 }, { x: 192, y: 0 }, { x: 192, y: 144 }, { x: 0, y: 144 }], { idFactory: makeId });
+  const result = attachStairToBoundary(boundary, boundary.edges[0].id, { width: 36, totalRise: 36, treadDepth: 10 }, makeId);
+  const resized = setStairWidth(result.boundary, result.stair, 42);
+  const byId = new Map(resized.boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  const start = byId.get(resized.stair.anchors.openingStartVertexId);
+  const end = byId.get(resized.stair.anchors.openingEndVertexId);
+
+  assert.ok(Math.abs(Math.hypot(end.x - start.x, end.y - start.y) - 42) < 1e-6);
+  assert.equal(resized.stair.dimensions.width, 42);
+  assert.equal(getStairInterfaceEdge(resized.stair).id, getStairInterfaceEdge(result.stair).id);
+  assert.equal(validateDeckBoundary(resized.boundary).valid, true);
 });

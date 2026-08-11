@@ -1,6 +1,6 @@
-import { createEdgeProperties, normalizeBoundaryEdge } from '../../core/construction-objects/edge-properties.js';
+import { createEdgeProperties, mergeEdgeProperties, normalizeBoundaryEdge } from '../../core/construction-objects/edge-properties.js';
 import { distance } from '../../core/geometry/vector.js';
-import { withComputedProperties } from '../deck-boundary/deck-boundary.js';
+import { validateDeckBoundary, withComputedProperties } from '../deck-boundary/deck-boundary.js';
 
 export const STAIR_TYPE = 'stair';
 export const STAIR_SCHEMA_VERSION = 1;
@@ -138,11 +138,78 @@ export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory 
     name: options.name ?? 'Main stairs',
     host: { boundaryId: boundary.id, sourceEdgeId: edgeId },
     anchors: { openingStartVertexId: openingStart.id, outerStartVertexId: outerStart.id, outerEndVertexId: outerEnd.id, openingEndVertexId: openingEnd.id },
+    interfaceEdge: normalizeBoundaryEdge({
+      type: 'stair-interface-edge',
+      id: idFactory('edge'),
+      startVertexId: openingStart.id,
+      endVertexId: openingEnd.id,
+      role: 'stair-interface',
+      metadata: { generatedBy: stairId, interface: 'deck-to-stair' },
+      properties: createEdgeProperties({ classification: { relationship: 'stair-interface', exterior: true }, attachments: { stairId, stairComponent: 'deck-interface' } }),
+    }),
     generatedEdgeIds: edges.filter((edge) => edge.properties?.attachments?.stairId === stairId).map((edge) => edge.id),
     dimensions: { width: settings.width, totalRise: settings.totalRise, ...layout },
     lifecycle: { phase: 'established', revision: 1 },
   };
   return { boundary: withComputedProperties({ ...boundary, vertices, edges }), stair };
+}
+
+export function getStairInterfaceEdge(stair) {
+  return normalizeBoundaryEdge(stair.interfaceEdge ?? {
+    type: 'stair-interface-edge',
+    id: `${stair.id}:deck-interface`,
+    startVertexId: stair.anchors.openingStartVertexId,
+    endVertexId: stair.anchors.openingEndVertexId,
+    role: 'stair-interface',
+    metadata: { generatedBy: stair.id, interface: 'deck-to-stair', migrated: true },
+    properties: createEdgeProperties({ classification: { relationship: 'stair-interface', exterior: true }, attachments: { stairId: stair.id, stairComponent: 'deck-interface' } }),
+  });
+}
+
+export function updateStairInterfaceEdgeProperties(stair, patch) {
+  const interfaceEdge = getStairInterfaceEdge(stair);
+  return {
+    ...stair,
+    interfaceEdge: normalizeBoundaryEdge({ ...interfaceEdge, properties: mergeEdgeProperties(interfaceEdge.properties, patch) }),
+    lifecycle: { ...stair.lifecycle, revision: (stair.lifecycle?.revision ?? 1) + 1 },
+  };
+}
+
+export function setStairWidth(boundary, stair, width) {
+  if (!Number.isFinite(width) || width < 24) throw new Error('Stair width must be at least 24 inches.');
+  const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  const anchors = stair.anchors;
+  const topStart = byId.get(anchors.openingStartVertexId);
+  const outerStart = byId.get(anchors.outerStartVertexId);
+  const outerEnd = byId.get(anchors.outerEndVertexId);
+  const topEnd = byId.get(anchors.openingEndVertexId);
+  if (![topStart, outerStart, outerEnd, topEnd].every(Boolean)) throw new Error('Stair anchors are incomplete.');
+  const currentWidth = distance(topStart, topEnd);
+  const unit = { x: (topEnd.x - topStart.x) / currentWidth, y: (topEnd.y - topStart.y) / currentWidth };
+  const topMid = { x: (topStart.x + topEnd.x) / 2, y: (topStart.y + topEnd.y) / 2 };
+  const outerMid = { x: (outerStart.x + outerEnd.x) / 2, y: (outerStart.y + outerEnd.y) / 2 };
+  const half = width / 2;
+  const positions = new Map([
+    [topStart.id, { x: topMid.x - unit.x * half, y: topMid.y - unit.y * half }],
+    [topEnd.id, { x: topMid.x + unit.x * half, y: topMid.y + unit.y * half }],
+    [outerStart.id, { x: outerMid.x - unit.x * half, y: outerMid.y - unit.y * half }],
+    [outerEnd.id, { x: outerMid.x + unit.x * half, y: outerMid.y + unit.y * half }],
+  ]);
+  const resizedBoundary = withComputedProperties({
+    ...boundary,
+    vertices: boundary.vertices.map((vertex) => positions.has(vertex.id) ? { ...vertex, ...positions.get(vertex.id) } : vertex),
+  });
+  const validation = validateDeckBoundary(resizedBoundary);
+  if (!validation.valid) throw new Error(`Stair width cannot change: ${validation.issues[0].message}`);
+  return {
+    boundary: resizedBoundary,
+    stair: {
+      ...stair,
+      interfaceEdge: getStairInterfaceEdge(stair),
+      dimensions: { ...stair.dimensions, width },
+      lifecycle: { ...stair.lifecycle, revision: (stair.lifecycle?.revision ?? 1) + 1 },
+    },
+  };
 }
 
 function stairEdge(id, startVertexId, endVertexId, stairId, component) {

@@ -1,6 +1,7 @@
 import { createProjectDocument, parseProject, serializeProject, setProjectWorkflowStage, upsertObject } from '../core/document/project-document.js';
 import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
+import { getDimensionLayer, getDimensionOffset, setDimensionLayerVisibility, setDimensionOffset } from '../core/annotations/dimension-layer.js';
 import { collectSnapTargets, resolveSnap } from '../core/geometry/snap-engine.js';
 import { nearestPointOnSegment } from '../core/geometry/vector.js';
 import { formatFeetInches, formatSquareFeet } from '../core/units/length.js';
@@ -8,7 +9,7 @@ import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, removeVertex, setEdgeLength, setEdgeRole, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
-import { attachStairToBoundary, deriveStairDragOptions, deriveStairTreads, validateStairPlacement } from '../tools/stairs/stair.js';
+import { attachStairToBoundary, deriveStairDragOptions, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'cme.project.v1';
@@ -39,6 +40,7 @@ let touchGesture = null;
 let pendingTouch = null;
 let stairDraft = null;
 let stairGesture = null;
+let dimensionDragStart = null;
 
 function loadProject() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -82,6 +84,7 @@ function render() {
   const validation = current ? validateDeckBoundary(current) : null;
   const progress = deriveModelProgress(documentModel);
   const lifecycle = current ? getBoundaryLifecycle(current) : null;
+  const dimensionLayer = getDimensionLayer(documentModel);
   app.innerHTML = `
     <main class="app-shell">
       <header class="topbar">
@@ -104,6 +107,7 @@ function render() {
             <span class="divider"></span>
             <button class="button ghost" data-mode="select">Edit corners</button>
             <button class="button ${mode === 'draw' ? 'primary' : 'ghost'}" data-mode="draw">Draw outline</button>
+            <button class="button ${dimensionLayer.visible ? 'active-constraint' : 'ghost'}" data-action="toggle-dimensions" title="Show or hide the Dimensions layer">${dimensionLayer.visible ? '◉' : '○'} Dimensions</button>
             ${draft.length >= 3 ? '<button class="button primary" data-action="complete-draft">Close boundary</button>' : ''}
           </div>
           <svg class="model-canvas ${mode === 'draw' ? 'drawing' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
@@ -125,7 +129,8 @@ function renderProgress(progress, current) {
 }
 
 function renderGridControls() {
-  return `<section class="inspector-section"><div class="eyebrow">Workspace</div><h2>Construction grid</h2><p class="section-copy">Grid density adapts as you navigate. Choose a fixed field increment when needed.</p><div class="field-grid"><div class="field full"><label for="grid-spacing">Snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><label class="toggle-row"><input id="grid-visible" type="checkbox" ${gridVisible ? 'checked' : ''}><span>Show construction grid</span></label><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
+  const dimensionsVisible = getDimensionLayer(documentModel).visible;
+  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Annotation layers can be hidden without changing the construction model.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label></section><section class="inspector-section"><div class="eyebrow">Workspace</div><h2>Construction grid</h2><p class="section-copy">Grid density adapts as you navigate. Choose a fixed field increment when needed.</p><div class="field-grid"><div class="field full"><label for="grid-spacing">Snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><label class="toggle-row"><input id="grid-visible" type="checkbox" ${gridVisible ? 'checked' : ''}><span>Show construction grid</span></label><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
 }
 
 function renderInspector(current, validation) {
@@ -135,6 +140,8 @@ function renderInspector(current, validation) {
   const selectedEdge = selected.kind === 'edge' ? current.edges.find((edge) => edge.id === selected.id) : null;
   const selectedVertex = selected.kind === 'vertex' ? current.vertices.find((vertex) => vertex.id === selected.id) : null;
   const selectedStair = selected.kind === 'stair' ? documentModel.objects.find((object) => object.type === 'stair' && object.id === selected.id) : null;
+  const selectedStairEdge = selected.kind === 'stair-edge' ? findStairInterfaceByEdgeId(selected.id) : null;
+  const selectedDimension = selected.kind === 'dimension' ? resolveDimensionReference(selected.id) : null;
   const lifecycle = getBoundaryLifecycle(current);
   const firstIssue = validation.issues[0];
   return `
@@ -142,8 +149,51 @@ function renderInspector(current, validation) {
     ${selectedEdge ? renderEdgeInspector(current, selectedEdge) : ''}
     ${stairDraft && selectedEdge ? renderStairInspector(current, selectedEdge) : ''}
     ${selectedStair ? renderStairObjectInspector(selectedStair) : ''}
+    ${selectedStairEdge ? renderStairInterfaceInspector(current, selectedStairEdge.stair, selectedStairEdge.edge) : ''}
+    ${selectedDimension ? renderDimensionInspector(selectedDimension) : ''}
     ${selectedVertex ? `<section class="inspector-section"><div class="eyebrow">Selected corner</div><h2>Geometry corner</h2><p class="section-copy">Drag freely, or place this corner over a neighboring corner to merge them and remove the redundant edge.</p><div class="vertex-guidance"><span class="merge-symbol"></span><span>Neighboring corners glow when a valid merge is available.</span></div><div class="action-stack"><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Remove corner</button></div></section>` : ''}
     <section class="inspector-section"><div class="eyebrow">Project model</div><h2>Ready for future objects</h2><p class="section-copy">Edges and corners keep stable identities for house attachments, stairs, railings, fascia, framing, and takeoff.</p><div class="action-stack"><button class="button" data-action="new-boundary">Start over</button></div></section>`;
+}
+
+function renderStairInterfaceInspector(current, stair, edge) {
+  const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+  const start = byId.get(edge.startVertexId);
+  const end = byId.get(edge.endVertexId);
+  const length = start && end ? Math.hypot(end.x - start.x, end.y - start.y) : stair.dimensions.width;
+  const properties = normalizeBoundaryEdge(edge).properties;
+  return `<section class="inspector-section edge-inspector stair-interface-panel"><div class="object-status"><div><div class="eyebrow">Deck–Stair interface</div><h2>${formatFeetInches(length)}</h2></div><span class="object-badge established">Selectable edge</span></div><p class="section-copy">This is the construction line where the staircase meets the deck. Assign finishes here without creating overlapping geometry.</p><div class="field-grid"><div class="field full"><label for="stair-interface-width">Exact opening width</label><div class="compound-field"><input id="stair-interface-width" value="${formatFeetInches(length)}"><button class="button" data-action="apply-stair-width">Apply</button></div></div></div><div class="property-list"><label><input type="checkbox" data-edge-property="fascia" ${properties.finishes.fascia ? 'checked' : ''}><span><strong>Fascia</strong><small>Finish board at stair interface</small></span></label><label><input type="checkbox" data-edge-property="pictureFrame" ${properties.finishes.pictureFrame ? 'checked' : ''}><span><strong>Picture frame</strong><small>Decking board along opening</small></span></label><label><input type="checkbox" data-edge-property="demolition" ${properties.existingConditions.demolition ? 'checked' : ''}><span><strong>Demolition</strong><small>Existing interface to remove</small></span></label></div><div class="continuity-note">Owned by ${escapeHtml(stair.name)}</div></section>`;
+}
+
+function renderDimensionInspector(reference) {
+  return `<section class="inspector-section dimension-panel"><div class="eyebrow">Dimension annotation</div><h2>${escapeHtml(reference.label)}</h2><p class="section-copy">Drag this label anywhere in the workspace to reveal construction below it. Double-click it to edit the linked geometry when that operation is safe.</p><div class="action-stack"><button class="button" data-action="edit-dimension">Edit linked measurement</button><button class="button" data-action="reset-dimension-position">Reset label position</button></div></section>`;
+}
+
+function findStairInterfaceByEdgeId(edgeId) {
+  for (const stair of documentModel.objects.filter((object) => object.type === 'stair')) {
+    const edge = getStairInterfaceEdge(stair);
+    if (edge.id === edgeId) return { stair, edge };
+  }
+  return null;
+}
+
+function resolveDimensionReference(referenceId) {
+  const current = boundary();
+  const edgeIndex = current?.edges.findIndex((edge) => edge.id === referenceId) ?? -1;
+  if (edgeIndex >= 0) {
+    const edge = current.edges[edgeIndex];
+    const start = current.vertices[edgeIndex];
+    const end = current.vertices[(edgeIndex + 1) % current.vertices.length];
+    const stair = edge.properties?.attachments?.stairId
+      ? documentModel.objects.find((object) => object.type === 'stair' && object.id === edge.properties.attachments.stairId)
+      : null;
+    return { kind: 'boundary-edge', edge, stair, label: `${formatFeetInches(Math.hypot(end.x - start.x, end.y - start.y))} dimension` };
+  }
+  const interfaceReference = findStairInterfaceByEdgeId(referenceId);
+  if (!interfaceReference || !current) return null;
+  const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+  const start = byId.get(interfaceReference.edge.startVertexId);
+  const end = byId.get(interfaceReference.edge.endVertexId);
+  return { kind: 'stair-interface', ...interfaceReference, label: `${formatFeetInches(Math.hypot(end.x - start.x, end.y - start.y))} stair opening` };
 }
 
 function renderStairObjectInspector(stair) {
@@ -211,6 +261,19 @@ function renderStairShape(svg, current, stair, preview) {
   deriveStairTreads(current, stair).forEach((tread, index) => {
     svg.append(svgElement('line', { x1: tread.start.x, y1: tread.start.y, x2: tread.end.x, y2: tread.end.y, class: preview ? 'stair-preview-tread' : 'stair-tread', 'data-step': index + 1 }));
   });
+  if (!preview) renderStairInterfaceEdge(svg, current, stair, byId);
+}
+
+function renderStairInterfaceEdge(svg, current, stair, byId) {
+  const edge = getStairInterfaceEdge(stair);
+  const start = byId.get(edge.startVertexId);
+  const end = byId.get(edge.endVertexId);
+  if (!start || !end) return;
+  renderEdgeConstructionGraphics(svg, current, start, end, edge.properties);
+  const selectedClass = selected.kind === 'stair-edge' && selected.id === edge.id ? 'selected' : '';
+  svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `stair-interface-visible ${selectedClass}` }));
+  svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'stair-interface-hit', 'data-stair-edge-id': edge.id }));
+  if (getDimensionLayer(documentModel).visible) addDimension(svg, start, end, edge.id);
 }
 
 function renderBoundarySvg(svg, current, validation) {
@@ -224,7 +287,7 @@ function renderBoundarySvg(svg, current, validation) {
     svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `boundary-edge-visible ${edge.role} ${selectedClass}` }));
     const hit = svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'boundary-edge', 'data-edge-id': edge.id });
     svg.append(hit);
-    addDimension(svg, start, end);
+    if (getDimensionLayer(documentModel).visible) addDimension(svg, start, end, edge.id);
   });
   const markerSize = Math.max(2.8, viewport.width / 150);
   const hitSize = viewport.width / Math.max(svg.clientWidth || 1000, 1) * 34;
@@ -265,7 +328,7 @@ function renderEdgeConstructionGraphics(svg, current, start, end, properties) {
   }
 }
 
-function addDimension(svg, start, end) {
+function addDimension(svg, start, end, referenceId) {
   const midX = (start.x + end.x) / 2;
   const midY = (start.y + end.y) / 2;
   const dx = end.x - start.x;
@@ -276,10 +339,15 @@ function addDimension(svg, start, end) {
   const offsetY = (dx / length) * 8;
   const label = formatFeetInches(length);
   const width = Math.max(25, label.length * 3.3);
-  svg.append(svgElement('rect', { x: midX + offsetX - width / 2, y: midY + offsetY - 4, width, height: 8, rx: 2, class: 'dimension-bg' }));
+  const annotationOffset = getDimensionOffset(documentModel, referenceId);
+  const group = svgElement('g', { class: 'dimension-annotation', transform: `translate(${annotationOffset.x} ${annotationOffset.y})` });
+  const selectedClass = selected.kind === 'dimension' && selected.id === referenceId ? 'selected' : '';
+  group.append(svgElement('rect', { x: midX + offsetX - width / 2 - 2, y: midY + offsetY - 6, width: width + 4, height: 12, rx: 3, class: 'dimension-hit', 'data-dimension-id': referenceId }));
+  group.append(svgElement('rect', { x: midX + offsetX - width / 2, y: midY + offsetY - 4, width, height: 8, rx: 2, class: `dimension-bg ${selectedClass}`, 'data-dimension-id': referenceId }));
   const text = svgElement('text', { x: midX + offsetX, y: midY + offsetY + .3, class: 'dimension-text' });
   text.textContent = label;
-  svg.append(text);
+  group.append(text);
+  svg.append(group);
 }
 
 function renderDraft(svg) {
@@ -305,12 +373,17 @@ function bindEvents() {
     const key = input.dataset.edgeProperty;
     const patch = key === 'demolition' ? { existingConditions: { demolition: input.checked } } : { finishes: { [key]: input.checked } };
     message = `${key} property updated`;
-    commitBoundary(markBoundaryEdited(updateEdgeProperties(boundary(), selected.id, patch)), 'Update edge construction properties');
+    commitSelectedEdgeProperties(patch, 'Update edge construction properties');
   }));
   const gridSpacing = app.querySelector('#grid-spacing');
   if (gridSpacing) gridSpacing.addEventListener('change', () => { gridSetting = gridSpacing.value; render(); });
   const gridVisibility = app.querySelector('#grid-visible');
   if (gridVisibility) gridVisibility.addEventListener('change', () => { gridVisible = gridVisibility.checked; render(); });
+  const dimensionVisibility = app.querySelector('#dimensions-visible');
+  if (dimensionVisibility) dimensionVisibility.addEventListener('change', () => {
+    message = `Dimensions layer ${dimensionVisibility.checked ? 'shown' : 'hidden'}`;
+    commit(setDimensionLayerVisibility(documentModel, dimensionVisibility.checked), 'Toggle Dimensions layer');
+  });
   const svg = app.querySelector('.model-canvas');
   svg.addEventListener('pointerdown', (event) => canvasPointerDown(svg, event));
   svg.addEventListener('pointermove', (event) => canvasPointerMove(svg, event));
@@ -318,7 +391,7 @@ function bindEvents() {
   svg.addEventListener('pointercancel', (event) => finishPointerGesture(svg, event));
   svg.addEventListener('wheel', (event) => zoomAtPointer(svg, event), { passive: false });
   svg.addEventListener('contextmenu', (event) => event.preventDefault());
-  svg.addEventListener('dblclick', (event) => edgeDoubleClick(svg, event));
+  svg.addEventListener('dblclick', (event) => canvasDoubleClick(svg, event));
 }
 
 function setMode(nextMode) {
@@ -335,7 +408,9 @@ function setMode(nextMode) {
 function canvasPointerDown(svg, event) {
   const vertexId = event.target.dataset.vertexId;
   const edgeId = event.target.dataset.edgeId;
-  if (event.pointerType === 'touch' && !((mode === 'select' && (vertexId || edgeId)) || (mode === 'stair' && edgeId))) {
+  const stairEdgeId = event.target.dataset.stairEdgeId;
+  const dimensionId = event.target.dataset.dimensionId;
+  if (event.pointerType === 'touch' && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || dimensionId)) || (mode === 'stair' && edgeId))) {
     event.preventDefault();
     activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     svg.setPointerCapture(event.pointerId);
@@ -367,6 +442,18 @@ function canvasPointerDown(svg, event) {
     const now = performance.now();
     if (now - lastMiddleClick < 350) fitProject(svg);
     lastMiddleClick = now;
+    return;
+  }
+  if (mode === 'select' && dimensionId) {
+    selected = { kind: 'dimension', id: dimensionId };
+    dimensionDragStart = { pointerId: event.pointerId, document: documentModel, point: screenToWorld(svg, event), offset: getDimensionOffset(documentModel, dimensionId), moved: false };
+    svg.setPointerCapture(event.pointerId);
+    return;
+  }
+  if (mode === 'select' && stairEdgeId) {
+    selected = { kind: 'stair-edge', id: stairEdgeId };
+    message = 'Deck–Stair interface selected · assign construction properties';
+    render();
     return;
   }
   if (mode === 'select' && vertexId) {
@@ -445,6 +532,16 @@ function canvasPointerMove(svg, event) {
     return;
   }
   const raw = screenToWorld(svg, event);
+  if (dimensionDragStart?.pointerId === event.pointerId) {
+    const dx = raw.x - dimensionDragStart.point.x;
+    const dy = raw.y - dimensionDragStart.point.y;
+    const moved = Math.hypot(dx, dy) > viewport.width / Math.max(svg.clientWidth, 1) * 2;
+    dimensionDragStart.moved ||= moved;
+    documentModel = setDimensionOffset(dimensionDragStart.document, selected.id, { x: dimensionDragStart.offset.x + dx, y: dimensionDragStart.offset.y + dy });
+    persist();
+    drawCanvasRefresh();
+    return;
+  }
   if (stairGesture?.pointerId === event.pointerId) {
     const options = deriveStairDragOptions(boundary(), stairGesture.edgeId, raw, stairGesture.width);
     stairDraft = options
@@ -514,6 +611,21 @@ function finishPointerGesture(svg, event) {
   if (panGesture) {
     panGesture = null;
     app.querySelector('.model-canvas')?.classList.remove('panning');
+  }
+  if (dimensionDragStart?.pointerId === event.pointerId) {
+    const gesture = dimensionDragStart;
+    const finalDocument = documentModel;
+    dimensionDragStart = null;
+    documentModel = gesture.document;
+    if (event.type === 'pointercancel') {
+      message = 'Dimension move canceled';
+      persist();
+      render();
+    } else if (gesture.moved) {
+      message = 'Dimension label repositioned';
+      commit(finalDocument, 'Move dimension annotation');
+    }
+    return;
   }
   if (stairGesture?.pointerId === event.pointerId) {
     const options = stairDraft;
@@ -606,6 +718,17 @@ function remapEdgeReferences(document, removedEdgeId, survivingEdgeId) {
   };
 }
 
+function commitSelectedEdgeProperties(patch, label) {
+  if (selected.kind === 'edge') {
+    commitBoundary(markBoundaryEdited(updateEdgeProperties(boundary(), selected.id, patch)), label);
+    return;
+  }
+  if (selected.kind === 'stair-edge') {
+    const reference = findStairInterfaceByEdgeId(selected.id);
+    if (reference) commit(upsertObject(documentModel, updateStairInterfaceEdgeProperties(reference.stair, patch)), label);
+  }
+}
+
 function snapForPointer(raw, anchor, extraVertices = [], excludedIds = new Set()) {
   const objects = boundary() ? [boundary()] : [];
   const draftObject = { vertices: [...draft, ...extraVertices], edges: [] };
@@ -647,6 +770,38 @@ function fitProject(svg = app.querySelector('.model-canvas')) {
   const aspect = (svg?.clientWidth || 1000) / (svg?.clientHeight || 700);
   animateViewport(fitViewport(points, aspect));
   message = points.length ? 'Project fitted to workspace' : 'Workspace reset';
+}
+
+function canvasDoubleClick(svg, event) {
+  const dimensionId = event.target.dataset.dimensionId;
+  if (dimensionId) {
+    event.preventDefault();
+    editDimensionReference(dimensionId);
+    return;
+  }
+  edgeDoubleClick(svg, event);
+}
+
+function editDimensionReference(referenceId) {
+  const reference = resolveDimensionReference(referenceId);
+  if (!reference) return;
+  if (reference.kind === 'stair-interface') {
+    selected = { kind: 'stair-edge', id: reference.edge.id };
+    message = 'Edit the exact stair opening width';
+    render();
+    requestAnimationFrame(() => app.querySelector('#stair-interface-width')?.select());
+    return;
+  }
+  if (reference.stair) {
+    selected = { kind: 'stair', id: reference.stair.id };
+    message = 'This dimension belongs to generated Stair geometry';
+    render();
+    return;
+  }
+  selected = { kind: 'edge', id: reference.edge.id };
+  message = 'Edit the exact construction dimension';
+  render();
+  requestAnimationFrame(() => app.querySelector('#edge-length')?.select());
 }
 
 function edgeDoubleClick(svg, event) {
@@ -694,6 +849,20 @@ function handleAction(action) {
     if (offset === null) { message = 'Enter an offset such as 6 in or -1 ft'; render(); }
     else { message = 'Construction edge moved'; commitBoundary(markBoundaryEdited(offsetEdge(boundary(), selected.id, offset)), 'Offset boundary edge'); }
   }
+  if (action === 'apply-stair-width' && selected.kind === 'stair-edge') {
+    const width = parseConstructionLength(app.querySelector('#stair-interface-width')?.value);
+    const reference = findStairInterfaceByEdgeId(selected.id);
+    if (!width || !reference) { message = 'Enter a valid stair opening width'; render(); }
+    else {
+      try {
+        const resized = setStairWidth(boundary(), reference.stair, width);
+        let next = upsertObject(documentModel, markBoundaryEdited(resized.boundary));
+        next = upsertObject(next, resized.stair);
+        message = 'Deck–Stair interface width updated';
+        commit(next, 'Set stair opening width');
+      } catch (error) { message = error.message; render(); }
+    }
+  }
   if (action === 'constraint-horizontal' && selected.kind === 'edge') { message = 'Horizontal relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'horizontal')), 'Constrain edge horizontal'); }
   if (action === 'constraint-vertical' && selected.kind === 'edge') { message = 'Vertical relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'vertical')), 'Constrain edge vertical'); }
   if (action === 'insert-midpoint' && selected.kind === 'edge') {
@@ -715,6 +884,16 @@ function handleAction(action) {
     render();
   }
   if (action === 'cancel-stair') { stairGesture = null; stairDraft = null; mode = 'select'; message = 'Stair placement canceled'; render(); }
+  if (action === 'toggle-dimensions') {
+    const visible = !getDimensionLayer(documentModel).visible;
+    message = `Dimensions layer ${visible ? 'shown' : 'hidden'}`;
+    commit(setDimensionLayerVisibility(documentModel, visible), 'Toggle Dimensions layer');
+  }
+  if (action === 'edit-dimension' && selected.kind === 'dimension') editDimensionReference(selected.id);
+  if (action === 'reset-dimension-position' && selected.kind === 'dimension') {
+    message = 'Dimension label returned to its default position';
+    commit(setDimensionOffset(documentModel, selected.id, { x: 0, y: 0 }), 'Reset dimension annotation');
+  }
   if (action === 'undo') { documentModel = history.undo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Undid last change'; render(); }
   if (action === 'redo') { documentModel = history.redo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Redid change'; render(); }
   if (action === 'delete-vertex' && selected.kind === 'vertex') { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }
