@@ -5,7 +5,7 @@ await mkdir('dist/server', { recursive: true });
 await mkdir('dist/client/src', { recursive: true });
 await cp('index.html', 'dist/client/index.html');
 await cp('src', 'dist/client/src', { recursive: true });
-await cp('public/og-lowered-areas.png', 'dist/client/og-lowered-areas.png');
+await cp('public/og-stair-snap-dimension-leaders.png', 'dist/client/og-stair-snap-dimension-leaders.png');
 await cp('package.json', 'dist/client/package.json');
 await writeFile('dist/server/index.js', `export default {
   async fetch(request, env) {

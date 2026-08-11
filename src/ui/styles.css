@@ -84,6 +84,7 @@ button { color: inherit; }
 .stair-construction-fill { fill: rgb(63 78 84 / 65%); stroke: #91a4a7; stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
 .stair-tread { stroke: #d1d9da; stroke-width: 1.2; vector-effect: non-scaling-stroke; pointer-events: none; }
 .stair-preview-fill { fill: rgb(216 255 98 / 8%); stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.stair-snap-node { fill: rgb(216 255 98 / 18%); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; animation: arrow-pulse 850ms ease-in-out infinite; }
 .stair-preview-tread { stroke: rgb(216 255 98 / 65%); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; pointer-events: none; }
 .stair-interface-visible { stroke: var(--cyan); stroke-width: 2.4; vector-effect: non-scaling-stroke; pointer-events: none; }
 .stair-interface-visible.selected { stroke: var(--accent); stroke-width: 3.5; }
@@ -109,6 +110,11 @@ button { color: inherit; }
 .dimension-text.level-down { fill: #fff; font-weight: 800; font-size: 8px; }
 .level-down-leader { stroke: #a7bec8; stroke-width: 1.25; stroke-dasharray: 4 2; vector-effect: non-scaling-stroke; pointer-events: none; }
 .level-down-leader-arrow { fill: #a7bec8; pointer-events: none; }
+.dimension-leader { stroke: #849ca7; stroke-width: 1.15; vector-effect: non-scaling-stroke; pointer-events: none; }
+.dimension-leader-arrow { fill: #a7bec8; pointer-events: none; }
+.dimension-leader.repositioning, .dimension-leader-arrow.repositioning { stroke: var(--accent); fill: var(--accent); }
+.dimension-arrow-pulse { fill: none; stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; animation: arrow-pulse 850ms ease-in-out infinite; }
+@keyframes arrow-pulse { 0%, 100% { opacity: .25; transform: scale(.75); transform-origin: center; } 50% { opacity: 1; transform: scale(1.2); transform-origin: center; } }
 .level-down-picture-frame { stroke: #d5e5ea; stroke-width: 5; opacity: .65; vector-effect: non-scaling-stroke; pointer-events: none; }
 .level-down-fascia { stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .dimension-text { fill: #d8e2e5; font-size: 5px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }

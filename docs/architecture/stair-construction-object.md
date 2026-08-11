@@ -19,6 +19,12 @@ Therefore, a staircase always has one fewer tread than risers. For example, a 36
 
 Placement replaces part of the selected boundary edge with four new opening/run segments. The source edge ID remains on the first surviving segment. Unaffected edge and vertex IDs remain unchanged.
 
+## Adjacent-node snapping
+
+The initial press along a host edge determines the stair opening. Each side snaps to its neighboring boundary node when it falls within a 12-inch field snap zone. When a short edge is close to the preferred 36-inch opening, both sides use the adjacent nodes automatically. Snapped openings reuse the existing vertex identities instead of inserting coincident vertices, so the resulting Deck Boundary remains valid and contains no zero-length edges.
+
+The live preview pulses snapped nodes while total rise, risers, and treads continue updating from the outward drag. A stair whose side is node-controlled cannot be resized independently; moving the shared construction node remains the authoritative edit.
+
 ## Data ownership
 
 The Stair object owns construction dimensions and references:

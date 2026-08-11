@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDimensionLayer, getDimensionLayer, getDimensionOffset, isDimensionReferenceVisible, setDimensionLayerVisibility, setDimensionOffset, setDimensionReferenceVisibility } from '../src/core/annotations/dimension-layer.js';
+import { createDimensionLayer, getDimensionLayer, getDimensionLeaderOffset, getDimensionOffset, isDimensionReferenceVisible, setDimensionLayerVisibility, setDimensionLeaderOffset, setDimensionOffset, setDimensionReferenceVisibility } from '../src/core/annotations/dimension-layer.js';
 import { createProjectDocument, parseProject, serializeProject } from '../src/core/document/project-document.js';
 
 test('dimension annotations default to a visible independent layer', () => {
@@ -26,4 +26,12 @@ test('individual dimensions can be hidden and restored without hiding the layer'
   assert.equal(getDimensionLayer(hidden).visible, true);
   const restored = setDimensionReferenceVisibility(hidden, 'edge-1', true);
   assert.equal(isDimensionReferenceVisible(restored, 'edge-1'), true);
+});
+
+test('dimension arrow positions remain attached as serializable object-relative offsets', () => {
+  const project = createProjectDocument({ id: 'project-dimensions' });
+  const moved = setDimensionLeaderOffset(project, 'edge-1', { x: 42, y: -18 });
+  const restored = parseProject(serializeProject(moved));
+  assert.deepEqual(getDimensionLeaderOffset(restored, 'edge-1'), { x: 42, y: -18 });
+  assert.deepEqual(getDimensionLeaderOffset(restored, 'edge-2'), { x: 0, y: 0 });
 });

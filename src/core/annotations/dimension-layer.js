@@ -9,6 +9,7 @@ export function createDimensionLayer(overrides = {}) {
     name: 'Dimensions',
     visible: true,
     offsets: {},
+    leaderOffsets: {},
     hiddenReferenceIds: [],
     ...overrides,
   };
@@ -44,6 +45,21 @@ export function setDimensionOffset(document, referenceId, offset) {
 
 export function getDimensionOffset(document, referenceId) {
   return getDimensionLayer(document).offsets[referenceId] ?? { x: 0, y: 0 };
+}
+
+export function setDimensionLeaderOffset(document, referenceId, offset) {
+  const layer = getDimensionLayer(document);
+  return replaceDimensionLayer(document, {
+    ...layer,
+    leaderOffsets: {
+      ...layer.leaderOffsets,
+      [referenceId]: { x: Number(offset.x) || 0, y: Number(offset.y) || 0 },
+    },
+  });
+}
+
+export function getDimensionLeaderOffset(document, referenceId) {
+  return getDimensionLayer(document).leaderOffsets?.[referenceId] ?? { x: 0, y: 0 };
 }
 
 export function isDimensionReferenceVisible(document, referenceId) {

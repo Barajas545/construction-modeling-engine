@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeckBoundary, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
-import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../src/tools/stairs/stair.js';
+import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../src/tools/stairs/stair.js';
 
 function ids() { let count = 0; return (prefix) => `${prefix}-${++count}`; }
 
@@ -38,6 +38,18 @@ test('dragging outward from a boundary edge derives a live stair definition', ()
   assert.equal(attached.stair.dimensions.totalRun, 40);
   assert.equal(attached.stair.dimensions.riserCount, 5);
   assert.equal(deriveStairTreads(attached.boundary, attached.stair).length, 4);
+});
+
+test('stair sides snap simply to adjacent boundary nodes', () => {
+  const makeId = ids();
+  const boundary = createDeckBoundary([{ x: 0, y: 0 }, { x: 48, y: 0 }, { x: 48, y: 144 }, { x: 0, y: 144 }], { idFactory: makeId });
+  const opening = deriveStairOpeningSnap(boundary, boundary.edges[0].id, { x: 24, y: 0 }, 36);
+  assert.deepEqual(opening, { width: 48, startOffset: 0, snappedStart: true, snappedEnd: true });
+  const attached = attachStairToBoundary(boundary, boundary.edges[0].id, { ...opening, totalRise: 30, treadDepth: 10 }, makeId);
+  assert.equal(attached.stair.anchors.openingStartVertexId, boundary.vertices[0].id);
+  assert.equal(attached.stair.anchors.openingEndVertexId, boundary.vertices[1].id);
+  assert.equal(attached.boundary.vertices.length, boundary.vertices.length + 2);
+  assert.equal(validateDeckBoundary(attached.boundary).valid, true);
 });
 
 test('manual stair definitions reject treads over 11 inches', () => {

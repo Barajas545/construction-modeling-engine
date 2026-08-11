@@ -46,7 +46,26 @@ export function calculateStairDragLayout(totalRun, riseToRunRatio = 0.9) {
   };
 }
 
-export function deriveStairDragOptions(boundary, edgeId, pointer, width = 36) {
+export function deriveStairOpeningSnap(boundary, edgeId, pointer, preferredWidth = 36, snapTolerance = 12) {
+  const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
+  if (edgeIndex < 0) return null;
+  const start = boundary.vertices[edgeIndex];
+  const end = boundary.vertices[(edgeIndex + 1) % boundary.vertices.length];
+  const edgeLength = distance(start, end);
+  if (edgeLength < 24) return null;
+  const unit = { x: (end.x - start.x) / edgeLength, y: (end.y - start.y) / edgeLength };
+  const centerDistance = Math.max(0, Math.min(edgeLength, (pointer.x - start.x) * unit.x + (pointer.y - start.y) * unit.y));
+  if (edgeLength <= preferredWidth + snapTolerance * 2) return { width: edgeLength, startOffset: 0, snappedStart: true, snappedEnd: true };
+  let openingStart = Math.max(0, Math.min(edgeLength - preferredWidth, centerDistance - preferredWidth / 2));
+  let openingEnd = openingStart + preferredWidth;
+  const snappedStart = openingStart <= snapTolerance;
+  const snappedEnd = edgeLength - openingEnd <= snapTolerance;
+  if (snappedStart) openingStart = 0;
+  if (snappedEnd) openingEnd = edgeLength;
+  return { width: openingEnd - openingStart, startOffset: openingStart, snappedStart, snappedEnd };
+}
+
+export function deriveStairDragOptions(boundary, edgeId, pointer, width = 36, startOffset = null) {
   const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
   if (edgeIndex < 0) return null;
   const start = boundary.vertices[edgeIndex];
@@ -58,7 +77,7 @@ export function deriveStairDragOptions(boundary, edgeId, pointer, width = 36) {
   const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
   const totalRun = Math.max(0, (pointer.x - midpoint.x) * normal.x + (pointer.y - midpoint.y) * normal.y);
   const layout = calculateStairDragLayout(totalRun);
-  return layout ? { width, ...layout } : null;
+  return layout ? { width, startOffset, ...layout } : null;
 }
 
 export function validateStairPlacement(boundary, edgeId, options) {
@@ -67,7 +86,9 @@ export function validateStairPlacement(boundary, edgeId, options) {
   const edgeLength = distance(boundary.vertices[edgeIndex], boundary.vertices[(edgeIndex + 1) % boundary.vertices.length]);
   const issues = [];
   if (!Number.isFinite(options.width) || options.width < 24) issues.push('Stair width must be at least 24 inches.');
-  if (options.width > edgeLength - 12) issues.push('Leave at least 6 inches of boundary edge on each side of the stair.');
+  if (options.width > edgeLength) issues.push('Stair width cannot exceed its host construction edge.');
+  const startOffset = options.startOffset ?? (edgeLength - options.width) / 2;
+  if (!Number.isFinite(startOffset) || startOffset < 0 || startOffset + options.width > edgeLength + 1e-8) issues.push('Stair sides must remain on the selected construction edge.');
   if (!Number.isFinite(options.totalRise) || options.totalRise <= 0) issues.push('Enter a positive total rise.');
   if (!Number.isFinite(options.treadDepth) || options.treadDepth <= 0) issues.push('Tread depth must be positive.');
   if (options.treadDepth > MAX_TREAD_DEPTH) issues.push('Each stair tread must be 11 inches or less.');
@@ -103,27 +124,21 @@ export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory 
         totalRun: settings.totalRun ?? (settings.riserCount - 1) * settings.treadDepth,
       }
     : calculatedLayout;
-  const margin = (length - settings.width) / 2;
-  const openingStart = { id: idFactory('vertex'), x: start.x + unit.x * margin, y: start.y + unit.y * margin, elevation: 0 };
-  const openingEnd = { id: idFactory('vertex'), x: start.x + unit.x * (margin + settings.width), y: start.y + unit.y * (margin + settings.width), elevation: 0 };
+  const margin = settings.startOffset ?? (length - settings.width) / 2;
+  const snappedStart = margin <= 1e-8;
+  const snappedEnd = margin + settings.width >= length - 1e-8;
+  const openingStart = snappedStart ? start : { id: idFactory('vertex'), x: start.x + unit.x * margin, y: start.y + unit.y * margin, elevation: 0 };
+  const openingEnd = snappedEnd ? end : { id: idFactory('vertex'), x: start.x + unit.x * (margin + settings.width), y: start.y + unit.y * (margin + settings.width), elevation: 0 };
   const outerStart = { id: idFactory('vertex'), x: openingStart.x + normal.x * layout.totalRun, y: openingStart.y + normal.y * layout.totalRun, elevation: -settings.totalRise };
   const outerEnd = { id: idFactory('vertex'), x: openingEnd.x + normal.x * layout.totalRun, y: openingEnd.y + normal.y * layout.totalRun, elevation: -settings.totalRise };
   const stairId = idFactory('stair');
-  const vertices = [
-    ...boundary.vertices.slice(0, edgeIndex + 1),
-    openingStart,
-    outerStart,
-    outerEnd,
-    openingEnd,
-    ...boundary.vertices.slice(edgeIndex + 1),
-  ].map((vertex, order) => ({ ...vertex, order }));
-  const generated = new Map([
-    [`${start.id}:${openingStart.id}`, normalizeBoundaryEdge({ ...sourceEdge, id: sourceEdge.id, endVertexId: openingStart.id })],
-    [`${openingStart.id}:${outerStart.id}`, stairEdge(idFactory('edge'), openingStart.id, outerStart.id, stairId, 'left-stringer')],
-    [`${outerStart.id}:${outerEnd.id}`, stairEdge(idFactory('edge'), outerStart.id, outerEnd.id, stairId, 'lower-landing-edge')],
-    [`${outerEnd.id}:${openingEnd.id}`, stairEdge(idFactory('edge'), outerEnd.id, openingEnd.id, stairId, 'right-stringer')],
-    [`${openingEnd.id}:${end.id}`, normalizeBoundaryEdge({ ...sourceEdge, id: idFactory('edge'), startVertexId: openingEnd.id })],
-  ]);
+  const vertices = [...boundary.vertices.slice(0, edgeIndex + 1), ...(!snappedStart ? [openingStart] : []), outerStart, outerEnd, ...(!snappedEnd ? [openingEnd] : []), ...boundary.vertices.slice(edgeIndex + 1)].map((vertex, order) => ({ ...vertex, order }));
+  const generated = new Map();
+  if (!snappedStart) generated.set(`${start.id}:${openingStart.id}`, normalizeBoundaryEdge({ ...sourceEdge, id: sourceEdge.id, endVertexId: openingStart.id }));
+  generated.set(`${openingStart.id}:${outerStart.id}`, stairEdge(snappedStart ? sourceEdge.id : idFactory('edge'), openingStart.id, outerStart.id, stairId, 'left-stringer'));
+  generated.set(`${outerStart.id}:${outerEnd.id}`, stairEdge(idFactory('edge'), outerStart.id, outerEnd.id, stairId, 'lower-landing-edge'));
+  generated.set(`${outerEnd.id}:${openingEnd.id}`, stairEdge(idFactory('edge'), outerEnd.id, openingEnd.id, stairId, 'right-stringer'));
+  if (!snappedEnd) generated.set(`${openingEnd.id}:${end.id}`, normalizeBoundaryEdge({ ...sourceEdge, id: idFactory('edge'), startVertexId: openingEnd.id }));
   const oldByPair = new Map(boundary.edges.map((edge) => [`${edge.startVertexId}:${edge.endVertexId}`, normalizeBoundaryEdge(edge)]));
   const edges = vertices.map((vertex, index) => {
     const next = vertices[(index + 1) % vertices.length];
@@ -148,7 +163,7 @@ export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory 
       properties: createEdgeProperties({ classification: { relationship: 'stair-interface', exterior: true }, attachments: { stairId, stairComponent: 'deck-interface' } }),
     }),
     generatedEdgeIds: edges.filter((edge) => edge.properties?.attachments?.stairId === stairId).map((edge) => edge.id),
-    dimensions: { width: settings.width, totalRise: settings.totalRise, ...layout },
+    dimensions: { width: settings.width, startOffset: margin, snappedStart, snappedEnd, totalRise: settings.totalRise, ...layout },
     lifecycle: { phase: 'established', revision: 1 },
   };
   return { boundary: withComputedProperties({ ...boundary, vertices, edges }), stair };
@@ -177,6 +192,7 @@ export function updateStairInterfaceEdgeProperties(stair, patch) {
 
 export function setStairWidth(boundary, stair, width) {
   if (!Number.isFinite(width) || width < 24) throw new Error('Stair width must be at least 24 inches.');
+  if (stair.dimensions.snappedStart || stair.dimensions.snappedEnd) throw new Error('This stair side is snapped to an adjacent node. Move the node to change its width.');
   const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
   const anchors = stair.anchors;
   const topStart = byId.get(anchors.openingStartVertexId);

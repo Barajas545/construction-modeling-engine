@@ -1,7 +1,7 @@
 import { createProjectDocument, parseProject, serializeProject, setProjectWorkflowStage, upsertObject } from '../core/document/project-document.js';
 import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
-import { getDimensionLayer, getDimensionOffset, isDimensionReferenceVisible, setDimensionLayerVisibility, setDimensionOffset, setDimensionReferenceVisibility } from '../core/annotations/dimension-layer.js';
+import { getDimensionLayer, getDimensionLeaderOffset, getDimensionOffset, isDimensionReferenceVisible, setDimensionLayerVisibility, setDimensionLeaderOffset, setDimensionOffset, setDimensionReferenceVisibility } from '../core/annotations/dimension-layer.js';
 import { getDeckingLayer, setDeckingLayerVisibility } from '../core/annotations/decking-layer.js';
 import { getRailingLayer, setRailingLayerVisibility, setRailingSnapSettings } from '../core/annotations/railing-layer.js';
 import { collectSnapTargets, resolveSnap } from '../core/geometry/snap-engine.js';
@@ -12,7 +12,7 @@ import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeRole, splitEdgeIntoSegments, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
-import { attachStairToBoundary, deriveStairDragOptions, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
+import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -45,6 +45,8 @@ let pendingTouch = null;
 let stairDraft = null;
 let stairGesture = null;
 let dimensionDragStart = null;
+let dimensionLeaderMode = null;
+let dimensionLeaderGesture = null;
 let railingDraft = null;
 let railingGesture = null;
 let levelDownDraft = [];
@@ -152,7 +154,7 @@ function renderContextPanel(current) {
     const properties = normalizeBoundaryEdge(edge).properties;
     const dimensionVisible = getDimensionLayer(documentModel).visible && isDimensionReferenceVisible(documentModel, edge.id);
     const breakDisabled = edgeHasRailingDependency(edge.id);
-    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction edge</div><h2>${formatFeetInches(length)}</h2></div>${close}</div><div class="context-actions context-actions-3"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="break-edge-2" ${breakDisabled ? 'disabled' : ''}>Break ×2</button><button class="button" data-action="break-edge-3" ${breakDisabled ? 'disabled' : ''}>Break ×3</button></div><div class="context-actions context-actions-3"><button class="button ${edge.role === 'house' ? 'active-constraint' : ''}" data-action="quick-house-attachment">House attachment</button><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div><button class="button context-full" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button>${breakDisabled ? '<div class="context-note">Remove connected railing before dividing this edge.</div>' : ''}</section>`;
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction edge</div><h2>${formatFeetInches(length)}</h2></div>${close}</div><div class="context-actions context-actions-3"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="break-edge-2" ${breakDisabled ? 'disabled' : ''}>Break ×2</button><button class="button" data-action="break-edge-3" ${breakDisabled ? 'disabled' : ''}>Break ×3</button></div><button class="button context-full ${dimensionLeaderMode?.referenceId === edge.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><div class="context-actions context-actions-3"><button class="button ${edge.role === 'house' ? 'active-constraint' : ''}" data-action="quick-house-attachment">House attachment</button><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div><button class="button context-full" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button>${breakDisabled ? '<div class="context-note">Remove connected railing before dividing this edge.</div>' : ''}</section>`;
   }
   if (selected.kind === 'stair-edge') {
     const reference = findStairInterfaceByEdgeId(selected.id);
@@ -164,9 +166,9 @@ function renderContextPanel(current) {
   if (selected.kind === 'vertex') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected corner</div><h2>Boundary vertex</h2></div>${close}</div><div class="context-actions"><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Delete corner</button></div></section>`;
   if (selected.kind === 'dimension') {
     const reference = resolveDimensionReference(selected.id);
-    if (reference?.kind === 'area') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(current.computed.areaSquareInches)}</h2></div>${close}</div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button primary" data-action="start-level-down">Add level down</button></div><button class="button context-full" data-action="reset-dimension-position">Reset area position</button><div class="context-note">Level Down starts and ends on the Deck Boundary. Intermediate clicks create a polyline.</div></section>`;
+    if (reference?.kind === 'area') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(current.computed.areaSquareInches)}</h2></div>${close}</div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button primary" data-action="start-level-down">Add level down</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div><button class="button context-full" data-action="reset-dimension-position">Reset area position</button><div class="context-note">Level Down starts and ends on the Deck Boundary. Intermediate clicks create a polyline.</div></section>`;
     if (reference?.kind === 'level-down-area') return renderLevelDownContext(reference.levelDown, reference.region, deckingVisible, close, true);
-    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected annotation</div><h2>Dimension</h2></div>${close}</div><div class="context-actions"><button class="button primary" data-action="edit-dimension">Edit object</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><button class="button danger context-full" data-action="toggle-selected-dimension">Delete dimension</button></section>`;
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected annotation</div><h2>Dimension</h2></div>${close}</div><div class="context-actions"><button class="button primary" data-action="edit-dimension">Edit object</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div><button class="button danger context-full" data-action="toggle-selected-dimension">Delete dimension</button></section>`;
   }
   if (selected.kind === 'level-down') {
     const reference = findLevelDownSegment(selected.id);
@@ -180,7 +182,7 @@ function renderContextPanel(current) {
 function renderLevelDownContext(levelDown, region, deckingVisible, close, selectedByDimension, segmentLength = null) {
   const finishes = levelDown.properties?.finishes ?? {};
   const totalDepth = getLevelDownDepth(levelDown);
-  return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected lowered area</div><h2>${region ? formatSquareFeet(region.areaSquareInches) : formatFeetInches(segmentLength ?? 0)}</h2></div>${close}</div><div class="context-stat"><span>Below main deck</span><strong>${formatInches(totalDepth)}</strong><small>Includes overlapping level changes</small></div><label class="context-select"><span>This step drop · entire polyline</span><div class="compound-field"><input id="quick-level-down-riser" value="${formatInches(levelDown.dimensions.riserHeight)}"><button class="button" data-action="apply-level-down-riser">Apply</button></div></label><div class="context-actions context-actions-3"><button class="button" data-action="make-level-down-90">Make 90°</button><button class="button ${finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-level-picture-frame">Picture frame</button><button class="button ${finishes.fascia ? 'active-constraint' : ''}" data-action="quick-level-fascia">Fascia</button></div><div class="context-actions"><button class="button" data-action="flip-level-down-side">Flip lowered side</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div>${selectedByDimension ? `<div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="reset-dimension-position">Reset position</button></div>` : '<div class="context-actions"><button class="button" data-action="break-level-down-2">Break ×2</button><button class="button" data-action="break-level-down-3">Break ×3</button></div>'}<button class="button danger context-full" data-action="delete-level-down">Delete lowered area</button><div class="context-note">The arrow dimension owns this lowered area. Moving it draws a live leader back to the region.</div></section>`;
+  return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected lowered area</div><h2>${region ? formatSquareFeet(region.areaSquareInches) : formatFeetInches(segmentLength ?? 0)}</h2></div>${close}</div><div class="context-stat"><span>Below main deck</span><strong>${formatInches(totalDepth)}</strong><small>Includes overlapping level changes</small></div><label class="context-select"><span>This step drop · entire polyline</span><div class="compound-field"><input id="quick-level-down-riser" value="${formatInches(levelDown.dimensions.riserHeight)}"><button class="button" data-action="apply-level-down-riser">Apply</button></div></label><div class="context-actions context-actions-3"><button class="button" data-action="make-level-down-90">Make 90°</button><button class="button ${finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-level-picture-frame">Picture frame</button><button class="button ${finishes.fascia ? 'active-constraint' : ''}" data-action="quick-level-fascia">Fascia</button></div><div class="context-actions"><button class="button" data-action="flip-level-down-side">Flip lowered side</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div>${selectedByDimension ? `<div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div>` : '<div class="context-actions"><button class="button" data-action="break-level-down-2">Break ×2</button><button class="button" data-action="break-level-down-3">Break ×3</button></div>'}<button class="button danger context-full" data-action="delete-level-down">Delete lowered area</button><div class="context-note">The arrow dimension owns this lowered area. Moving it draws a live leader back to the region.</div></section>`;
 }
 
 function renderProgress(progress, current) {
@@ -236,7 +238,8 @@ function renderStairInterfaceInspector(current, stair, edge) {
   const end = byId.get(edge.endVertexId);
   const length = start && end ? Math.hypot(end.x - start.x, end.y - start.y) : stair.dimensions.width;
   const properties = normalizeBoundaryEdge(edge).properties;
-  return `<section class="inspector-section edge-inspector stair-interface-panel"><div class="object-status"><div><div class="eyebrow">Deck–Stair interface</div><h2>${formatFeetInches(length)}</h2></div><span class="object-badge established">Selectable edge</span></div><p class="section-copy">This is the construction line where the staircase meets the deck. Assign finishes here without creating overlapping geometry.</p><div class="field-grid"><div class="field full"><label for="stair-interface-width">Exact opening width</label><div class="compound-field"><input id="stair-interface-width" value="${formatFeetInches(length)}"><button class="button" data-action="apply-stair-width">Apply</button></div></div></div><div class="property-list"><label><input type="checkbox" data-edge-property="fascia" ${properties.finishes.fascia ? 'checked' : ''}><span><strong>Fascia</strong><small>Finish board at stair interface</small></span></label><label><input type="checkbox" data-edge-property="pictureFrame" ${properties.finishes.pictureFrame ? 'checked' : ''}><span><strong>Picture frame</strong><small>Decking board along opening</small></span></label><label><input type="checkbox" data-edge-property="demolition" ${properties.existingConditions.demolition ? 'checked' : ''}><span><strong>Demolition</strong><small>Existing interface to remove</small></span></label></div><div class="continuity-note">Owned by ${escapeHtml(stair.name)}</div></section>`;
+  const nodeControlled = stair.dimensions.snappedStart || stair.dimensions.snappedEnd;
+  return `<section class="inspector-section edge-inspector stair-interface-panel"><div class="object-status"><div><div class="eyebrow">Deck–Stair interface</div><h2>${formatFeetInches(length)}</h2></div><span class="object-badge established">${nodeControlled ? 'Node snapped' : 'Selectable edge'}</span></div><p class="section-copy">${nodeControlled ? 'The stair side is attached to an adjacent construction node. Move that shared node to change the opening while preserving the snap.' : 'This is the construction line where the staircase meets the deck. Assign finishes here without creating overlapping geometry.'}</p><div class="field-grid"><div class="field full"><label for="stair-interface-width">Exact opening width</label><div class="compound-field"><input id="stair-interface-width" value="${formatFeetInches(length)}" ${nodeControlled ? 'disabled' : ''}><button class="button" data-action="apply-stair-width" ${nodeControlled ? 'disabled' : ''}>Apply</button></div></div></div><div class="property-list"><label><input type="checkbox" data-edge-property="fascia" ${properties.finishes.fascia ? 'checked' : ''}><span><strong>Fascia</strong><small>Finish board at stair interface</small></span></label><label><input type="checkbox" data-edge-property="pictureFrame" ${properties.finishes.pictureFrame ? 'checked' : ''}><span><strong>Picture frame</strong><small>Decking board along opening</small></span></label><label><input type="checkbox" data-edge-property="demolition" ${properties.existingConditions.demolition ? 'checked' : ''}><span><strong>Demolition</strong><small>Existing interface to remove</small></span></label></div><div class="continuity-note">Owned by ${escapeHtml(stair.name)}</div></section>`;
 }
 
 function renderDimensionInspector(reference) {
@@ -368,6 +371,26 @@ function resolveDimensionReference(referenceId) {
   return { kind: 'stair-interface', ...interfaceReference, label: `${formatFeetInches(Math.hypot(end.x - start.x, end.y - start.y))} stair opening` };
 }
 
+function getDimensionObjectAnchor(referenceId) {
+  const current = boundary();
+  const reference = resolveDimensionReference(referenceId);
+  if (!reference || !current) return null;
+  if (reference.kind === 'area') return getBoundaryCentroid(current);
+  if (reference.kind === 'level-down-area') return reference.region?.centroid ?? null;
+  if (reference.kind === 'railing') return { x: (reference.geometry.start.x + reference.geometry.end.x) / 2, y: (reference.geometry.start.y + reference.geometry.end.y) / 2 };
+  if (reference.kind === 'stair-interface') {
+    const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+    const start = byId.get(reference.edge.startVertexId);
+    const end = byId.get(reference.edge.endVertexId);
+    return start && end ? { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 } : null;
+  }
+  const edgeIndex = current.edges.findIndex((edge) => edge.id === reference.edge?.id);
+  if (edgeIndex < 0) return null;
+  const start = current.vertices[edgeIndex];
+  const end = current.vertices[(edgeIndex + 1) % current.vertices.length];
+  return { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+}
+
 function renderStairObjectInspector(stair) {
   const riserCount = stair.dimensions.riserCount ?? stair.dimensions.stepCount;
   const treadCount = stair.dimensions.treadCount ?? Math.max(1, riserCount - 1);
@@ -422,6 +445,13 @@ function renderStairPreview(svg, current) {
   try {
     const preview = attachStairToBoundary(current, selected.id, options, (prefix) => `preview-${prefix}-${++count}`);
     renderStairShape(svg, preview.boundary, preview.stair, true);
+    if (stairDraft.snappedStart || stairDraft.snappedEnd) {
+      const byId = new Map(preview.boundary.vertices.map((vertex) => [vertex.id, vertex]));
+      const snapIds = [stairDraft.snappedStart ? preview.stair.anchors.openingStartVertexId : null, stairDraft.snappedEnd ? preview.stair.anchors.openingEndVertexId : null];
+      snapIds.filter(Boolean).map((id) => byId.get(id)).filter(Boolean).forEach((point) => {
+        svg.append(svgElement('circle', { cx: point.x, cy: point.y, r: Math.max(5, viewport.width / 140), class: 'stair-snap-node' }));
+      });
+    }
   } catch { /* Inspector communicates invalid planning dimensions. */ }
 }
 
@@ -508,13 +538,17 @@ function renderAreaDimension(svg, current) {
   if (!isDimensionReferenceVisible(documentModel, referenceId)) return;
   const center = getBoundaryCentroid(current);
   const offset = getDimensionOffset(documentModel, referenceId);
+  const leaderOffset = getDimensionLeaderOffset(documentModel, referenceId);
+  const labelPoint = { x: center.x + offset.x, y: center.y - 24 + offset.y };
+  const tip = { x: center.x + leaderOffset.x, y: center.y + leaderOffset.y };
   const label = `AREA · ${formatSquareFeet(current.computed.areaSquareInches)}`;
   const width = Math.max(46, label.length * 3.5);
   const selectedClass = selected.kind === 'dimension' && selected.id === referenceId ? 'selected' : '';
-  const group = svgElement('g', { class: 'dimension-annotation area-dimension', transform: `translate(${offset.x} ${offset.y})` });
-  group.append(svgElement('rect', { x: center.x - width / 2 - 3, y: center.y - 8, width: width + 6, height: 16, rx: 4, class: 'dimension-hit', 'data-dimension-id': referenceId }));
-  group.append(svgElement('rect', { x: center.x - width / 2, y: center.y - 6, width, height: 12, rx: 3, class: `dimension-bg area ${selectedClass}`, 'data-dimension-id': referenceId }));
-  const text = svgElement('text', { x: center.x, y: center.y + 1, class: 'dimension-text area' });
+  renderDimensionLeader(svg, labelPoint, tip, referenceId);
+  const group = svgElement('g', { class: 'dimension-annotation area-dimension' });
+  group.append(svgElement('rect', { x: labelPoint.x - width / 2 - 3, y: labelPoint.y - 8, width: width + 6, height: 16, rx: 4, class: 'dimension-hit', 'data-dimension-id': referenceId }));
+  group.append(svgElement('rect', { x: labelPoint.x - width / 2, y: labelPoint.y - 6, width, height: 12, rx: 3, class: `dimension-bg area ${selectedClass}`, 'data-dimension-id': referenceId }));
+  const text = svgElement('text', { x: labelPoint.x, y: labelPoint.y + 1, class: 'dimension-text area' });
   text.textContent = label;
   group.append(text);
   svg.append(group);
@@ -556,14 +590,10 @@ function renderLevelDownDimension(svg, levelDown, region, totalDepth) {
   if (!isDimensionReferenceVisible(documentModel, referenceId)) return;
   const source = region.centroid;
   const offset = getDimensionOffset(documentModel, referenceId);
-  const labelPoint = { x: source.x + offset.x, y: source.y + offset.y };
-  if (Math.hypot(offset.x, offset.y) > 2) {
-    svg.append(svgElement('line', { x1: labelPoint.x, y1: labelPoint.y, x2: source.x, y2: source.y, class: 'level-down-leader' }));
-    const angle = Math.atan2(source.y - labelPoint.y, source.x - labelPoint.x);
-    const size = 5;
-    const arrow = [source, { x: source.x - Math.cos(angle - .55) * size, y: source.y - Math.sin(angle - .55) * size }, { x: source.x - Math.cos(angle + .55) * size, y: source.y - Math.sin(angle + .55) * size }];
-    svg.append(svgElement('polygon', { points: arrow.map((point) => `${point.x},${point.y}`).join(' '), class: 'level-down-leader-arrow' }));
-  }
+  const leaderOffset = getDimensionLeaderOffset(documentModel, referenceId);
+  const labelPoint = { x: source.x + offset.x, y: source.y - 20 + offset.y };
+  const tip = { x: source.x + leaderOffset.x, y: source.y + leaderOffset.y };
+  renderDimensionLeader(svg, labelPoint, tip, referenceId);
   const label = `↓ ${formatInches(totalDepth)}`;
   const width = Math.max(30, label.length * 4);
   const selectedClass = selected.kind === 'dimension' && selected.id === referenceId ? 'selected' : '';
@@ -620,14 +650,36 @@ function addDimension(svg, start, end, referenceId) {
   const label = formatFeetInches(length);
   const width = Math.max(25, label.length * 3.3);
   const annotationOffset = getDimensionOffset(documentModel, referenceId);
-  const group = svgElement('g', { class: 'dimension-annotation', transform: `translate(${annotationOffset.x} ${annotationOffset.y})` });
+  const leaderOffset = getDimensionLeaderOffset(documentModel, referenceId);
+  const labelPoint = { x: midX + offsetX + annotationOffset.x, y: midY + offsetY + annotationOffset.y };
+  const tip = { x: midX + leaderOffset.x, y: midY + leaderOffset.y };
+  renderDimensionLeader(svg, labelPoint, tip, referenceId);
+  const group = svgElement('g', { class: 'dimension-annotation' });
   const selectedClass = selected.kind === 'dimension' && selected.id === referenceId ? 'selected' : '';
-  group.append(svgElement('rect', { x: midX + offsetX - width / 2 - 2, y: midY + offsetY - 6, width: width + 4, height: 12, rx: 3, class: 'dimension-hit', 'data-dimension-id': referenceId }));
-  group.append(svgElement('rect', { x: midX + offsetX - width / 2, y: midY + offsetY - 4, width, height: 8, rx: 2, class: `dimension-bg ${selectedClass}`, 'data-dimension-id': referenceId }));
-  const text = svgElement('text', { x: midX + offsetX, y: midY + offsetY + .3, class: 'dimension-text' });
+  group.append(svgElement('rect', { x: labelPoint.x - width / 2 - 2, y: labelPoint.y - 6, width: width + 4, height: 12, rx: 3, class: 'dimension-hit', 'data-dimension-id': referenceId }));
+  group.append(svgElement('rect', { x: labelPoint.x - width / 2, y: labelPoint.y - 4, width, height: 8, rx: 2, class: `dimension-bg ${selectedClass}`, 'data-dimension-id': referenceId }));
+  const text = svgElement('text', { x: labelPoint.x, y: labelPoint.y + .3, class: 'dimension-text' });
   text.textContent = label;
   group.append(text);
   svg.append(group);
+}
+
+function renderDimensionLeader(svg, labelPoint, tip, referenceId) {
+  const active = dimensionLeaderMode?.referenceId === referenceId;
+  const dx = tip.x - labelPoint.x;
+  const dy = tip.y - labelPoint.y;
+  const length = Math.hypot(dx, dy);
+  if (length > 1) {
+    svg.append(svgElement('line', { x1: labelPoint.x, y1: labelPoint.y, x2: tip.x, y2: tip.y, class: `dimension-leader ${active ? 'repositioning' : ''}` }));
+    const angle = Math.atan2(dy, dx);
+    const size = Math.max(4, viewport.width / 175);
+    const arrow = [tip, { x: tip.x - Math.cos(angle - .55) * size, y: tip.y - Math.sin(angle - .55) * size }, { x: tip.x - Math.cos(angle + .55) * size, y: tip.y - Math.sin(angle + .55) * size }];
+    svg.append(svgElement('polygon', { points: arrow.map((point) => `${point.x},${point.y}`).join(' '), class: `dimension-leader-arrow ${active ? 'repositioning' : ''}` }));
+  }
+  if (active) {
+    const pulse = Math.max(5, viewport.width / 135);
+    svg.append(svgElement('circle', { cx: tip.x, cy: tip.y, r: pulse, class: 'dimension-arrow-pulse' }));
+  }
 }
 
 function renderDraft(svg) {
@@ -703,6 +755,8 @@ function bindEvents() {
 
 function setMode(nextMode) {
   mode = nextMode;
+  dimensionLeaderMode = null;
+  dimensionLeaderGesture = null;
   numericBuffer = '';
   stairGesture = null;
   railingGesture = null;
@@ -730,6 +784,18 @@ function canvasPointerDown(svg, event) {
   const dimensionId = event.target.dataset.dimensionId;
   const railingId = event.target.dataset.railingId;
   const levelDownSegmentId = event.target.dataset.levelDownSegmentId;
+  if (dimensionLeaderMode && event.button === 0) {
+    event.preventDefault();
+    const anchor = getDimensionObjectAnchor(dimensionLeaderMode.referenceId);
+    if (!anchor) { dimensionLeaderMode = null; message = 'Dimension object is no longer available'; render(); return; }
+    const point = screenToWorld(svg, event);
+    dimensionLeaderGesture = { pointerId: event.pointerId, document: documentModel, referenceId: dimensionLeaderMode.referenceId, anchor };
+    documentModel = setDimensionLeaderOffset(documentModel, dimensionLeaderMode.referenceId, { x: point.x - anchor.x, y: point.y - anchor.y });
+    persist();
+    svg.setPointerCapture(event.pointerId);
+    drawCanvasRefresh();
+    return;
+  }
   if (event.pointerType === 'touch' && !['railing', 'level-down'].includes(mode) && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || dimensionId || railingId || levelDownSegmentId)) || (mode === 'stair' && edgeId))) {
     event.preventDefault();
     activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
@@ -812,10 +878,13 @@ function canvasPointerDown(svg, event) {
       current.vertices[(edgeIndex + 1) % current.vertices.length].x - current.vertices[edgeIndex].x,
       current.vertices[(edgeIndex + 1) % current.vertices.length].y - current.vertices[edgeIndex].y,
     );
+    const opening = deriveStairOpeningSnap(current, edgeId, screenToWorld(svg, event), Math.min(36, edgeLength));
+    if (!opening) { message = 'Select a construction edge at least 24 inches long'; updateStatusMessage(); return; }
     selected = { kind: 'edge', id: edgeId };
-    stairGesture = { pointerId: event.pointerId, edgeId, width: Math.min(36, Math.max(24, edgeLength - 12)) };
-    stairDraft = { edgeId, width: stairGesture.width, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0, dragging: true };
-    message = 'Drag outward · watch TOTAL RISE · release to build';
+    stairGesture = { pointerId: event.pointerId, edgeId, ...opening };
+    stairDraft = { edgeId, ...opening, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0, dragging: true };
+    const stairSnapLabel = opening.snappedStart && opening.snappedEnd ? 'Both stair sides snapped to adjacent nodes' : opening.snappedStart || opening.snappedEnd ? 'One stair side snapped to an adjacent node' : 'Stair opening placed';
+    message = `${stairSnapLabel} · drag outward`;
     svg.setPointerCapture(event.pointerId);
     svg.classList.add('stairing');
     updateStairLiveHud();
@@ -912,6 +981,12 @@ function canvasPointerMove(svg, event) {
     return;
   }
   const raw = screenToWorld(svg, event);
+  if (dimensionLeaderGesture?.pointerId === event.pointerId) {
+    documentModel = setDimensionLeaderOffset(dimensionLeaderGesture.document, dimensionLeaderGesture.referenceId, { x: raw.x - dimensionLeaderGesture.anchor.x, y: raw.y - dimensionLeaderGesture.anchor.y });
+    persist();
+    drawCanvasRefresh();
+    return;
+  }
   if (mode === 'level-down') {
     levelDownPointer = resolveRailingSnap(raw);
     message = levelDownPointer ? `${levelDownPointer.label}${levelDownDraft.length ? ' · click to add or finish' : ' · click to start'}` : 'Move to an enabled snap target';
@@ -953,11 +1028,12 @@ function canvasPointerMove(svg, event) {
     return;
   }
   if (stairGesture?.pointerId === event.pointerId) {
-    const options = deriveStairDragOptions(boundary(), stairGesture.edgeId, raw, stairGesture.width);
+    const options = deriveStairDragOptions(boundary(), stairGesture.edgeId, raw, stairGesture.width, stairGesture.startOffset);
     stairDraft = options
-      ? { edgeId: stairGesture.edgeId, ...options, dragging: true }
-      : { edgeId: stairGesture.edgeId, width: stairGesture.width, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0, dragging: true };
-    message = options ? `${formatFeetInches(options.totalRise)} total rise · release to build` : 'Drag outward from the deck edge';
+      ? { edgeId: stairGesture.edgeId, ...stairGesture, ...options, dragging: true }
+      : { edgeId: stairGesture.edgeId, ...stairGesture, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0, dragging: true };
+    const stairSnapLabel = stairGesture.snappedStart && stairGesture.snappedEnd ? 'both sides snapped' : stairGesture.snappedStart || stairGesture.snappedEnd ? 'one side snapped' : 'free opening';
+    message = options ? `${formatFeetInches(options.totalRise)} total rise · ${stairSnapLabel} · release to build` : 'Drag outward from the deck edge';
     drawCanvasRefresh();
     updateStairLiveHud(event);
     updateStatusMessage();
@@ -1021,6 +1097,22 @@ function finishPointerGesture(svg, event) {
   if (panGesture) {
     panGesture = null;
     app.querySelector('.model-canvas')?.classList.remove('panning');
+  }
+  if (dimensionLeaderGesture?.pointerId === event.pointerId) {
+    const gesture = dimensionLeaderGesture;
+    const finalDocument = documentModel;
+    dimensionLeaderGesture = null;
+    dimensionLeaderMode = null;
+    documentModel = gesture.document;
+    if (event.type === 'pointercancel') {
+      message = 'Arrow reposition canceled';
+      persist();
+      render();
+    } else {
+      message = 'Dimension arrow repositioned · object relationship preserved';
+      commit(finalDocument, 'Reposition dimension arrow');
+    }
+    return;
   }
   if (dimensionDragStart?.pointerId === event.pointerId) {
     const gesture = dimensionDragStart;
@@ -1394,7 +1486,7 @@ function completeDraft() {
 }
 
 function handleAction(action) {
-  if (action === 'clear-selection') { selected = { kind: null, id: null }; message = 'Ready'; render(); }
+  if (action === 'clear-selection') { selected = { kind: null, id: null }; dimensionLeaderMode = null; dimensionLeaderGesture = null; message = 'Ready'; render(); }
   if (action === 'add-railing-panel' && selected.kind === 'railing') adjustSelectedRailingPanels(1);
   if (action === 'remove-railing-panel' && selected.kind === 'railing') adjustSelectedRailingPanels(-1);
   if (action === 'toggle-decking') {
@@ -1403,6 +1495,21 @@ function handleAction(action) {
     commit(setDeckingLayerVisibility(documentModel, visible), 'Toggle Decking layer');
   }
   if (action === 'toggle-selected-dimension' && ['edge', 'stair-edge', 'dimension'].includes(selected.kind)) toggleSelectedDimension();
+  if (action === 'reposition-dimension-arrow' && ['edge', 'stair-edge', 'dimension'].includes(selected.kind)) {
+    const referenceId = selected.id;
+    let next = setDimensionReferenceVisibility(documentModel, referenceId, true);
+    if (!getDimensionLayer(next).visible) next = setDimensionLayerVisibility(next, true);
+    documentModel = next;
+    persist();
+    dimensionLeaderMode = { referenceId };
+    message = 'Arrow tip is active · touch or drag anywhere to reposition it';
+    render();
+  }
+  if (action === 'reset-dimension-arrow' && selected.kind === 'dimension') {
+    dimensionLeaderMode = null;
+    message = 'Dimension arrow returned to its object';
+    commit(setDimensionLeaderOffset(documentModel, selected.id, { x: 0, y: 0 }), 'Reset dimension arrow');
+  }
   if (action === 'break-edge-2') breakSelectedEdge(2);
   if (action === 'break-edge-3') breakSelectedEdge(3);
   if (action === 'quick-house-attachment' && selected.kind === 'edge') {
@@ -1674,6 +1781,14 @@ function repeatLastSegment() {
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   const editingField = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+  if (event.key === 'Escape' && dimensionLeaderMode) {
+    event.preventDefault();
+    dimensionLeaderMode = null;
+    dimensionLeaderGesture = null;
+    message = 'Arrow reposition canceled';
+    render();
+    return;
+  }
   if (modifier && event.key.toLowerCase() === 'z') { event.preventDefault(); handleAction(event.shiftKey ? 'redo' : 'undo'); }
   if (modifier && event.key.toLowerCase() === 'y') { event.preventDefault(); handleAction('redo'); }
   if (!modifier && !editingField && mode !== 'draw' && event.key.toLowerCase() === 'e') {
