@@ -55,6 +55,7 @@ button { color: inherit; }
 .model-canvas.drawing { cursor: crosshair; }
 .model-canvas.panning { cursor: grabbing; }
 .model-canvas.stairing { cursor: ns-resize; }
+.model-canvas.railing { cursor: ew-resize; }
 .grid-minor { stroke: #151c21; stroke-width: .45; }
 .grid-major { stroke: #202a31; stroke-width: .6; }
 .axis-line { stroke: #35414a; stroke-width: .6; }
@@ -69,6 +70,13 @@ button { color: inherit; }
 .demolition-edge { stroke: #b3bec0; stroke-width: 2; stroke-dasharray: 7 5; vector-effect: non-scaling-stroke; opacity: .8; }
 .railing-post { fill: #d8ff62; stroke: #11171a; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .railing-post.existing { fill: #829096; }
+.railing-run-visible { stroke: #d8ff62; stroke-width: 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.railing-run-visible.selected { stroke: #fff; stroke-width: 4; }
+.railing-run-visible.preview { stroke: rgb(216 255 98 / 75%); stroke-dasharray: 5 3; }
+.railing-run-hit { stroke: transparent; stroke-width: 16; vector-effect: non-scaling-stroke; cursor: pointer; }
+.railing-run-post { fill: #d8ff62; stroke: #101518; stroke-width: 1.2; vector-effect: non-scaling-stroke; pointer-events: none; }
+.railing-run-post.selected { fill: #fff; }
+.railing-run-post.preview { fill: rgb(216 255 98 / 70%); }
 .stair-construction-fill { fill: rgb(63 78 84 / 65%); stroke: #91a4a7; stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
 .stair-tread { stroke: #d1d9da; stroke-width: 1.2; vector-effect: non-scaling-stroke; pointer-events: none; }
 .stair-preview-fill { fill: rgb(216 255 98 / 8%); stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; pointer-events: none; }

@@ -12,6 +12,8 @@ CME is in active construction-object development. **Deck Boundary**, the first p
 
 Sprint 2 promotes every boundary segment into a typed construction edge with editable geometry and construction properties. **Stairs**, the first attached construction object, use a tablet-first press-and-drag workflow with live tread geometry and total-rise feedback. The Deck–Stair interface is a selectable construction edge that can own Fascia, Picture Frame, and future metadata. CME keeps every riser at or below 7.5 inches, every tread at or below 11 inches, and treats the transition from the last tread to the deck as the final riser. A serializable Dimensions layer lets users hide annotations, drag labels away from construction, and open linked exact editing by double-clicking. Topology-aware vertex editing supports moving, inserting, removing, splitting, and intelligently merging neighboring corners while retaining construction meaning whenever the resulting boundary remains valid.
 
+**Railing** is the first edge-hosted construction object. A user presses any Deck Boundary or Deck–Stair interface edge and drags along it while equal sections and posts appear in real time. Runs retain normalized references to their host edge, use a maximum 6-foot clear span between 3.5-inch posts, share visible posts where runs meet, and classify non-collinear corners as exterior by default. This phase produces geometry and serializable quantities only; pricing remains intentionally outside the object.
+
 ## Run the workspace
 
 Use `npm start`, then open `http://localhost:4173`. The workspace stores the active project locally in the browser and can export a portable `.cme.json` project file.

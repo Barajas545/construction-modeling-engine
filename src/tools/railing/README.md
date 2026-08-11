@@ -1,6 +1,14 @@
 # Railing
 
-Railing — models railing runs, transitions, constraints, and construction intent.
+Railing is an edge-hosted construction object created by pressing and dragging along a Deck Boundary edge or Deck–Stair interface edge. The run stores normalized start and end positions rather than copied geometry, so it follows ordinary host-edge edits.
 
-This folder is a roadmap placeholder. Do not implement behavior until Product Lab provides and approves the corresponding specification. Future work must keep data structured and serializable, use shared services from `src/core/`, include automated tests, and validate against the official examples.
+`railing.js` owns the construction rules and serializable object contract:
 
+- maximum 72-inch clear span between post faces;
+- 3.5-inch default post width;
+- the fewest equal sections that satisfy the span rule;
+- project-level post deduplication at shared endpoints;
+- exterior corner classification by default;
+- geometry and quantities only, without pricing.
+
+The UI derives the current run geometry from the host edge on every render. Topology changes that would split or remove a hosted edge are currently blocked until dependency-aware repartitioning is implemented.

@@ -10,6 +10,7 @@ import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, removeVertex, setEdgeLength, setEdgeRole, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
+import { analyzeRailingGeometries, createRailingRun, deriveRailingGeometry, projectPointToEdge } from '../tools/railing/railing.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'cme.project.v1';
@@ -41,6 +42,8 @@ let pendingTouch = null;
 let stairDraft = null;
 let stairGesture = null;
 let dimensionDragStart = null;
+let railingDraft = null;
+let railingGesture = null;
 
 function loadProject() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -97,6 +100,7 @@ function render() {
           <button class="tool-button ${mode === 'select' ? 'active' : ''}" data-mode="select" title="Select and edit"><span class="tool-icon">↖</span><span class="tool-label">Select</span></button>
           <button class="tool-button ${mode === 'draw' ? 'active' : ''}" data-mode="draw" title="Draw a custom deck boundary"><span class="tool-icon">◇</span><span class="tool-label">Boundary</span></button>
           <button class="tool-button ${mode === 'stair' ? 'active' : ''}" data-mode="stair" title="Attach stairs to a boundary edge" ${!current ? 'disabled' : ''}><span class="tool-icon">▰</span><span class="tool-label">Stairs</span></button>
+          <button class="tool-button ${mode === 'railing' ? 'active' : ''}" data-mode="railing" title="Add railing along a construction edge" ${!current ? 'disabled' : ''}><span class="tool-icon">╥</span><span class="tool-label">Railing</span></button>
           <div class="tool-spacer"></div>
           <button class="tool-button" data-action="toggle-inspector" title="Project details"><span class="tool-icon">☷</span><span class="tool-label">Details</span></button>
         </nav>
@@ -142,6 +146,7 @@ function renderInspector(current, validation) {
   const selectedStair = selected.kind === 'stair' ? documentModel.objects.find((object) => object.type === 'stair' && object.id === selected.id) : null;
   const selectedStairEdge = selected.kind === 'stair-edge' ? findStairInterfaceByEdgeId(selected.id) : null;
   const selectedDimension = selected.kind === 'dimension' ? resolveDimensionReference(selected.id) : null;
+  const selectedRailing = selected.kind === 'railing' ? findRailingGeometry(selected.id) : null;
   const lifecycle = getBoundaryLifecycle(current);
   const firstIssue = validation.issues[0];
   return `
@@ -150,9 +155,15 @@ function renderInspector(current, validation) {
     ${stairDraft && selectedEdge ? renderStairInspector(current, selectedEdge) : ''}
     ${selectedStair ? renderStairObjectInspector(selectedStair) : ''}
     ${selectedStairEdge ? renderStairInterfaceInspector(current, selectedStairEdge.stair, selectedStairEdge.edge) : ''}
+    ${selectedRailing ? renderRailingInspector(selectedRailing) : ''}
     ${selectedDimension ? renderDimensionInspector(selectedDimension) : ''}
     ${selectedVertex ? `<section class="inspector-section"><div class="eyebrow">Selected corner</div><h2>Geometry corner</h2><p class="section-copy">Drag freely, or place this corner over a neighboring corner to merge them and remove the redundant edge.</p><div class="vertex-guidance"><span class="merge-symbol"></span><span>Neighboring corners glow when a valid merge is available.</span></div><div class="action-stack"><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Remove corner</button></div></section>` : ''}
     <section class="inspector-section"><div class="eyebrow">Project model</div><h2>Ready for future objects</h2><p class="section-copy">Edges and corners keep stable identities for house attachments, stairs, railings, fascia, framing, and takeoff.</p><div class="action-stack"><button class="button" data-action="new-boundary">Start over</button></div></section>`;
+}
+
+function renderRailingInspector(geometry) {
+  const project = analyzeRailingGeometries(getAllRailingGeometries());
+  return `<section class="inspector-section railing-panel"><div class="object-status"><div><div class="eyebrow">Railing construction object</div><h2>${escapeHtml(geometry.railing.name)}</h2></div><span class="object-badge established">Edge hosted</span></div><p class="section-copy">This run remains attached to its construction edge as the project geometry evolves.</p><div class="metric-grid"><div class="metric"><div class="metric-label">Run length</div><div class="metric-value">${formatFeetInches(geometry.length)}</div></div><div class="metric"><div class="metric-label">Sections</div><div class="metric-value">${geometry.sectionCount}</div></div><div class="metric"><div class="metric-label">Clear span</div><div class="metric-value">${formatFeetInches(geometry.clearSpan)}</div></div><div class="metric"><div class="metric-label">Run posts</div><div class="metric-value">${geometry.postCount}</div></div></div><div class="validation"><span class="validation-dot"></span><span>Equal sections keep every clear span at or below 6 ft. Exterior corners are the project default.</span></div><div class="hint-card">Project railing: ${formatFeetInches(project.totalLength)} · ${project.sectionCount} sections · ${project.estimatedPostCount} estimated posts.</div><div class="action-stack"><button class="button danger" data-action="remove-railing">Remove railing run</button></div></section>`;
 }
 
 function renderStairInterfaceInspector(current, stair, edge) {
@@ -176,8 +187,48 @@ function findStairInterfaceByEdgeId(edgeId) {
   return null;
 }
 
+function resolveRailingHostByEdgeId(edgeId, edgeKind = null) {
+  const current = boundary();
+  if (!current) return null;
+  if (edgeKind !== 'stair-interface-edge') {
+    const edge = current.edges.find((entry) => entry.id === edgeId);
+    if (edge) {
+      const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+      return {
+        host: { boundaryId: current.id, edgeId: edge.id, edgeKind: 'boundary-edge' },
+        edge,
+        start: byId.get(edge.startVertexId),
+        end: byId.get(edge.endVertexId),
+      };
+    }
+  }
+  const reference = findStairInterfaceByEdgeId(edgeId);
+  if (!reference) return null;
+  const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+  return {
+    host: { boundaryId: current.id, edgeId: reference.edge.id, edgeKind: 'stair-interface-edge', ownerId: reference.stair.id },
+    edge: reference.edge,
+    stair: reference.stair,
+    start: byId.get(reference.edge.startVertexId),
+    end: byId.get(reference.edge.endVertexId),
+  };
+}
+
+function findRailingGeometry(railingId) {
+  const railing = documentModel.objects.find((object) => object.type === 'railing-run' && object.id === railingId);
+  if (!railing) return null;
+  const reference = resolveRailingHostByEdgeId(railing.host.edgeId, railing.host.edgeKind);
+  return reference?.start && reference?.end ? deriveRailingGeometry(railing, reference.start, reference.end) : null;
+}
+
+function getAllRailingGeometries() {
+  return documentModel.objects.filter((object) => object.type === 'railing-run').map((railing) => findRailingGeometry(railing.id)).filter(Boolean);
+}
+
 function resolveDimensionReference(referenceId) {
   const current = boundary();
+  const railingGeometry = findRailingGeometry(referenceId);
+  if (railingGeometry) return { kind: 'railing', railing: railingGeometry.railing, geometry: railingGeometry, label: `${formatFeetInches(railingGeometry.length)} railing run` };
   const edgeIndex = current?.edges.findIndex((edge) => edge.id === referenceId) ?? -1;
   if (edgeIndex >= 0) {
     const edge = current.edges[edgeIndex];
@@ -232,6 +283,7 @@ function drawCanvas(svg, current, validation) {
     renderBoundarySvg(svg, current, validation);
     renderStairGraphics(svg, current);
     renderStairPreview(svg, current);
+    renderRailingGraphics(svg);
   }
   if (draft.length) renderDraft(svg);
 }
@@ -274,6 +326,24 @@ function renderStairInterfaceEdge(svg, current, stair, byId) {
   svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `stair-interface-visible ${selectedClass}` }));
   svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'stair-interface-hit', 'data-stair-edge-id': edge.id }));
   if (getDimensionLayer(documentModel).visible) addDimension(svg, start, end, edge.id);
+}
+
+function renderRailingGraphics(svg) {
+  getAllRailingGeometries().forEach((geometry) => renderRailingGeometry(svg, geometry, false));
+  if (railingDraft?.geometry) renderRailingGeometry(svg, railingDraft.geometry, true);
+}
+
+function renderRailingGeometry(svg, geometry, preview) {
+  const selectedClass = !preview && selected.kind === 'railing' && selected.id === geometry.railing.id ? 'selected' : '';
+  svg.append(svgElement('line', { x1: geometry.start.x, y1: geometry.start.y, x2: geometry.end.x, y2: geometry.end.y, class: `railing-run-visible ${preview ? 'preview' : ''} ${selectedClass}` }));
+  geometry.posts.forEach((post) => {
+    const size = preview ? 4 : 4.5;
+    svg.append(svgElement('rect', { x: post.x - size / 2, y: post.y - size / 2, width: size, height: size, rx: .5, class: `railing-run-post ${preview ? 'preview' : ''} ${selectedClass}` }));
+  });
+  if (!preview) {
+    svg.append(svgElement('line', { x1: geometry.start.x, y1: geometry.start.y, x2: geometry.end.x, y2: geometry.end.y, class: 'railing-run-hit', 'data-railing-id': geometry.railing.id }));
+    if (getDimensionLayer(documentModel).visible) addDimension(svg, geometry.start, geometry.end, geometry.railing.id);
+  }
 }
 
 function renderBoundarySvg(svg, current, validation) {
@@ -398,10 +468,13 @@ function setMode(nextMode) {
   mode = nextMode;
   numericBuffer = '';
   stairGesture = null;
+  railingGesture = null;
+  railingDraft = null;
   if (mode !== 'stair') stairDraft = null;
   if (mode !== 'draw') { draft = []; pointerWorld = null; message = 'Ready'; }
   if (mode === 'draw') message = 'Click the first corner of the deck';
   if (mode === 'stair') message = 'Press a boundary edge and drag outward to build stairs';
+  if (mode === 'railing') message = 'Press a Deck Boundary or stair interface edge and drag along it';
   render();
 }
 
@@ -410,7 +483,8 @@ function canvasPointerDown(svg, event) {
   const edgeId = event.target.dataset.edgeId;
   const stairEdgeId = event.target.dataset.stairEdgeId;
   const dimensionId = event.target.dataset.dimensionId;
-  if (event.pointerType === 'touch' && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || dimensionId)) || (mode === 'stair' && edgeId))) {
+  const railingId = event.target.dataset.railingId;
+  if (event.pointerType === 'touch' && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || dimensionId || railingId)) || (mode === 'stair' && edgeId) || (mode === 'railing' && (edgeId || stairEdgeId)))) {
     event.preventDefault();
     activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     svg.setPointerCapture(event.pointerId);
@@ -450,6 +524,12 @@ function canvasPointerDown(svg, event) {
     svg.setPointerCapture(event.pointerId);
     return;
   }
+  if (mode === 'select' && railingId) {
+    selected = { kind: 'railing', id: railingId };
+    message = 'Railing run selected · hosted by construction geometry';
+    render();
+    return;
+  }
   if (mode === 'select' && stairEdgeId) {
     selected = { kind: 'stair-edge', id: stairEdgeId };
     message = 'Deck–Stair interface selected · assign construction properties';
@@ -487,6 +567,18 @@ function canvasPointerDown(svg, event) {
     svg.setPointerCapture(event.pointerId);
     svg.classList.add('stairing');
     updateStairLiveHud();
+    drawCanvasRefresh();
+    return;
+  }
+  if (mode === 'railing' && (edgeId || stairEdgeId)) {
+    const reference = resolveRailingHostByEdgeId(stairEdgeId || edgeId, stairEdgeId ? 'stair-interface-edge' : 'boundary-edge');
+    if (!reference?.start || !reference?.end) return;
+    const projection = projectPointToEdge(reference.start, reference.end, screenToWorld(svg, event));
+    railingGesture = { pointerId: event.pointerId, reference, startT: projection.t };
+    railingDraft = { startT: projection.t, endT: projection.t, geometry: null };
+    message = 'Drag along the construction edge · posts update in real time';
+    svg.setPointerCapture(event.pointerId);
+    svg.classList.add('railing');
     drawCanvasRefresh();
     return;
   }
@@ -540,6 +632,23 @@ function canvasPointerMove(svg, event) {
     documentModel = setDimensionOffset(dimensionDragStart.document, selected.id, { x: dimensionDragStart.offset.x + dx, y: dimensionDragStart.offset.y + dy });
     persist();
     drawCanvasRefresh();
+    return;
+  }
+  if (railingGesture?.pointerId === event.pointerId) {
+    const projection = projectPointToEdge(railingGesture.reference.start, railingGesture.reference.end, raw);
+    const temporary = {
+      type: 'railing-run',
+      id: 'railing-preview',
+      name: 'Railing preview',
+      host: railingGesture.reference.host,
+      anchors: { startT: railingGesture.startT, endT: projection.t },
+      settings: { maxClearSpan: 72, postWidth: 3.5 },
+    };
+    const geometry = deriveRailingGeometry(temporary, railingGesture.reference.start, railingGesture.reference.end);
+    railingDraft = { startT: railingGesture.startT, endT: projection.t, geometry };
+    message = `${formatFeetInches(geometry.length)} railing · ${geometry.sectionCount} equal section${geometry.sectionCount === 1 ? '' : 's'} · ${geometry.postCount} posts`;
+    drawCanvasRefresh();
+    updateStatusMessage();
     return;
   }
   if (stairGesture?.pointerId === event.pointerId) {
@@ -627,6 +736,31 @@ function finishPointerGesture(svg, event) {
     }
     return;
   }
+  if (railingGesture?.pointerId === event.pointerId) {
+    const gesture = railingGesture;
+    const draftRun = railingDraft;
+    railingGesture = null;
+    railingDraft = null;
+    app.querySelector('.model-canvas')?.classList.remove('railing');
+    if (event.type === 'pointercancel' || !draftRun?.geometry || draftRun.geometry.length < 12) {
+      message = event.type === 'pointercancel' ? 'Railing placement canceled' : 'Drag at least 12 inches along the edge';
+      render();
+      return;
+    }
+    try {
+      const railing = createRailingRun(gesture.reference.host, draftRun.startT, draftRun.endT);
+      let next = upsertObject(documentModel, railing);
+      next = updateRailingHostAttachment(next, railing, true);
+      selected = { kind: 'railing', id: railing.id };
+      mode = 'select';
+      message = `${formatFeetInches(draftRun.geometry.length)} railing · ${draftRun.geometry.sectionCount} sections added`;
+      commit(next, 'Add edge-hosted railing run');
+    } catch (error) {
+      message = error.message;
+      render();
+    }
+    return;
+  }
   if (stairGesture?.pointerId === event.pointerId) {
     const options = stairDraft;
     stairGesture = null;
@@ -701,7 +835,12 @@ function finishPointerGesture(svg, event) {
 }
 
 function isVertexReferencedByAttachment(vertexId) {
-  return documentModel.objects.some((object) => object.type === 'stair' && Object.values(object.anchors ?? {}).includes(vertexId));
+  if (documentModel.objects.some((object) => object.type === 'stair' && Object.values(object.anchors ?? {}).includes(vertexId))) return true;
+  const current = boundary();
+  const vertexIndex = current?.vertices.findIndex((vertex) => vertex.id === vertexId) ?? -1;
+  if (vertexIndex < 0) return false;
+  const adjacentEdgeIds = new Set([current.edges[vertexIndex]?.id, current.edges[(vertexIndex - 1 + current.edges.length) % current.edges.length]?.id]);
+  return documentModel.objects.some((object) => object.type === 'railing-run' && adjacentEdgeIds.has(object.host.edgeId));
 }
 
 function remapEdgeReferences(document, removedEdgeId, survivingEdgeId) {
@@ -727,6 +866,34 @@ function commitSelectedEdgeProperties(patch, label) {
     const reference = findStairInterfaceByEdgeId(selected.id);
     if (reference) commit(upsertObject(documentModel, updateStairInterfaceEdgeProperties(reference.stair, patch)), label);
   }
+}
+
+function updateRailingHostAttachment(document, railing, attach) {
+  const host = railing.host;
+  if (host.edgeKind === 'stair-interface-edge') {
+    const stair = document.objects.find((object) => object.type === 'stair' && object.id === host.ownerId);
+    if (!stair) return document;
+    const edge = getStairInterfaceEdge(stair);
+    const currentIds = edge.properties.attachments.railingIds ?? [];
+    const railingIds = attach ? [...new Set([...currentIds, railing.id])] : currentIds.filter((id) => id !== railing.id);
+    return upsertObject(document, updateStairInterfaceEdgeProperties(stair, { attachments: { railingIds } }));
+  }
+  const current = document.objects.find((object) => object.type === 'deck-boundary' && object.id === host.boundaryId);
+  const edge = current?.edges.find((entry) => entry.id === host.edgeId);
+  if (!current || !edge) return document;
+  const currentIds = normalizeBoundaryEdge(edge).properties.attachments.railingIds ?? [];
+  const railingIds = attach ? [...new Set([...currentIds, railing.id])] : currentIds.filter((id) => id !== railing.id);
+  return upsertObject(document, markBoundaryEdited(updateEdgeProperties(current, host.edgeId, { attachments: { railingIds } })));
+}
+
+function removeSelectedRailing() {
+  const railing = documentModel.objects.find((object) => object.type === 'railing-run' && object.id === selected.id);
+  if (!railing) return;
+  let next = updateRailingHostAttachment(documentModel, railing, false);
+  next = { ...next, objects: next.objects.filter((object) => object.id !== railing.id) };
+  selected = { kind: null, id: null };
+  message = 'Railing run removed';
+  commit(next, 'Remove railing run');
 }
 
 function snapForPointer(raw, anchor, extraVertices = [], excludedIds = new Set()) {
@@ -785,6 +952,12 @@ function canvasDoubleClick(svg, event) {
 function editDimensionReference(referenceId) {
   const reference = resolveDimensionReference(referenceId);
   if (!reference) return;
+  if (reference.kind === 'railing') {
+    selected = { kind: 'railing', id: reference.railing.id };
+    message = 'Railing measurement selected · drag a new run to change its extents';
+    render();
+    return;
+  }
   if (reference.kind === 'stair-interface') {
     selected = { kind: 'stair-edge', id: reference.edge.id };
     message = 'Edit the exact stair opening width';
@@ -808,6 +981,11 @@ function edgeDoubleClick(svg, event) {
   if (mode !== 'select' || !event.target.dataset.edgeId) return;
   const current = boundary();
   const edgeId = event.target.dataset.edgeId;
+  if ((normalizeBoundaryEdge(current.edges.find((edge) => edge.id === edgeId)).properties.attachments.railingIds ?? []).length) {
+    message = 'Remove the hosted railing before splitting this construction edge';
+    render();
+    return;
+  }
   const edgeIndex = current.edges.findIndex((edge) => edge.id === edgeId);
   const raw = screenToWorld(svg, event);
   const projected = nearestPointOnSegment(raw, current.vertices[edgeIndex], current.vertices[(edgeIndex + 1) % current.vertices.length]);
@@ -868,6 +1046,11 @@ function handleAction(action) {
   if (action === 'insert-midpoint' && selected.kind === 'edge') {
     const current = boundary();
     const edgeIndex = current.edges.findIndex((edge) => edge.id === selected.id);
+    if ((normalizeBoundaryEdge(current.edges[edgeIndex]).properties.attachments.railingIds ?? []).length) {
+      message = 'Remove the hosted railing before splitting this construction edge';
+      render();
+      return;
+    }
     const start = current.vertices[edgeIndex];
     const end = current.vertices[(edgeIndex + 1) % current.vertices.length];
     const existingVertexIds = new Set(current.vertices.map((vertex) => vertex.id));
@@ -894,9 +1077,13 @@ function handleAction(action) {
     message = 'Dimension label returned to its default position';
     commit(setDimensionOffset(documentModel, selected.id, { x: 0, y: 0 }), 'Reset dimension annotation');
   }
+  if (action === 'remove-railing' && selected.kind === 'railing') removeSelectedRailing();
   if (action === 'undo') { documentModel = history.undo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Undid last change'; render(); }
   if (action === 'redo') { documentModel = history.redo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Redid change'; render(); }
-  if (action === 'delete-vertex' && selected.kind === 'vertex') { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }
+  if (action === 'delete-vertex' && selected.kind === 'vertex') {
+    if (isVertexReferencedByAttachment(selected.id)) { message = 'This corner anchors an attached construction object and cannot be removed yet'; render(); }
+    else { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }
+  }
   if (action === 'new-boundary') {
     const next = { ...documentModel, objects: documentModel.objects.filter((object) => object.type !== 'deck-boundary') };
     commit(next, 'Remove deck boundary'); selected = { kind: null, id: null }; mode = 'select'; message = 'Ready for a new boundary';
