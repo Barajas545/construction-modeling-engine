@@ -1,5 +1,5 @@
 import { distance, findSelfIntersections, polygonArea, polygonPerimeter } from '../../core/geometry/vector.js';
-import { createEdgeProperties, mergeEdgeProperties, normalizeBoundaryEdge } from '../../core/construction-objects/edge-properties.js';
+import { combineEdgeProperties, createEdgeProperties, mergeEdgeProperties, normalizeBoundaryEdge } from '../../core/construction-objects/edge-properties.js';
 
 export const DECK_BOUNDARY_TYPE = 'deck-boundary';
 export const DECK_BOUNDARY_SCHEMA_VERSION = 1;
@@ -119,6 +119,61 @@ export function removeVertex(boundary, vertexId) {
   const vertices = boundary.vertices.filter((vertex) => vertex.id !== vertexId)
     .map((vertex, order) => ({ ...vertex, order }));
   return withComputedProperties({ ...boundary, vertices, edges });
+}
+
+export function findAdjacentMergeCandidate(boundary, sourceVertexId, position, tolerance) {
+  const sourceIndex = boundary.vertices.findIndex((vertex) => vertex.id === sourceVertexId);
+  if (sourceIndex < 0) return null;
+  const candidates = [
+    boundary.vertices[(sourceIndex - 1 + boundary.vertices.length) % boundary.vertices.length],
+    boundary.vertices[(sourceIndex + 1) % boundary.vertices.length],
+  ];
+  return candidates
+    .map((vertex) => ({ vertex, distance: distance(vertex, position) }))
+    .filter((candidate) => candidate.distance <= tolerance)
+    .sort((a, b) => a.distance - b.distance)[0]?.vertex ?? null;
+}
+
+export function mergeAdjacentVertices(boundary, sourceVertexId, targetVertexId) {
+  if (boundary.vertices.length <= 3) throw new Error('A deck boundary needs at least three corners.');
+  const sourceIndex = boundary.vertices.findIndex((vertex) => vertex.id === sourceVertexId);
+  const targetIndex = boundary.vertices.findIndex((vertex) => vertex.id === targetVertexId);
+  if (sourceIndex < 0 || targetIndex < 0) throw new Error('Boundary corner was not found.');
+  const previousIndex = (sourceIndex - 1 + boundary.vertices.length) % boundary.vertices.length;
+  const nextIndex = (sourceIndex + 1) % boundary.vertices.length;
+  if (targetIndex !== previousIndex && targetIndex !== nextIndex) throw new Error('Only neighboring boundary corners can merge.');
+
+  const previousEdgeIndex = previousIndex;
+  const outgoingEdgeIndex = sourceIndex;
+  const previousEdge = normalizeBoundaryEdge(boundary.edges[previousEdgeIndex]);
+  const outgoingEdge = normalizeBoundaryEdge(boundary.edges[outgoingEdgeIndex]);
+  let removedEdge;
+  let survivor;
+  if (targetIndex === nextIndex) {
+    removedEdge = outgoingEdge;
+    survivor = normalizeBoundaryEdge({
+      ...previousEdge,
+      endVertexId: targetVertexId,
+      properties: combineEdgeProperties(previousEdge.properties, outgoingEdge.properties, outgoingEdge.id),
+      metadata: { ...previousEdge.metadata, mergedEdgeIds: [...new Set([...(previousEdge.metadata?.mergedEdgeIds ?? []), outgoingEdge.id])] },
+    });
+  } else {
+    removedEdge = previousEdge;
+    survivor = normalizeBoundaryEdge({
+      ...outgoingEdge,
+      startVertexId: targetVertexId,
+      properties: combineEdgeProperties(outgoingEdge.properties, previousEdge.properties, previousEdge.id),
+      metadata: { ...outgoingEdge.metadata, mergedEdgeIds: [...new Set([...(outgoingEdge.metadata?.mergedEdgeIds ?? []), previousEdge.id])] },
+    });
+  }
+  const vertices = boundary.vertices.filter((vertex) => vertex.id !== sourceVertexId).map((vertex, order) => ({ ...vertex, order }));
+  const edges = boundary.edges
+    .filter((edge) => edge.id !== removedEdge.id)
+    .map((edge) => edge.id === survivor.id ? survivor : normalizeBoundaryEdge(edge));
+  const merged = withComputedProperties({ ...boundary, vertices, edges });
+  const validation = validateDeckBoundary(merged);
+  if (!validation.valid) throw new Error(`Corners cannot merge: ${validation.issues[0].message}`);
+  return { boundary: merged, removedEdgeId: removedEdge.id, survivingEdgeId: survivor.id, removedVertexId: sourceVertexId, targetVertexId };
 }
 
 export function setEdgeRole(boundary, edgeId, role) {

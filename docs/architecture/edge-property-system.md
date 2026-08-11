@@ -33,4 +33,6 @@ Edge operations work against stable edge IDs:
 - drag the edge using the same offset operation;
 - split or reconnect edges while preserving identity where practical.
 
+When neighboring vertices merge, the redundant edge is removed and one adjacent edge survives. The survivor retains its ID, adopts the new endpoint, combines supported construction flags and attachments, and records the removed edge ID as provenance. Conflicting property ownership remains deterministic: the surviving edge wins unless its value is unassigned.
+
 Downstream dependency notification is a future requirement. Current revisions identify that the authoritative boundary changed.

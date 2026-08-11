@@ -75,6 +75,7 @@ button { color: inherit; }
 .vertex { fill: #0d1114; stroke: #f1f5f4; stroke-width: 1.6; vector-effect: non-scaling-stroke; pointer-events: none; }
 .vertex-hit { fill: transparent; cursor: grab; }
 .vertex.selected { fill: var(--accent); stroke: #fff; }
+.vertex.merge-ready { fill: var(--accent); stroke: #fff; stroke-width: 2.4; filter: drop-shadow(0 0 5px rgb(216 255 98 / 90%)); }
 .vertex.start { fill: var(--accent); }
 .dimension-bg { fill: #10161a; stroke: #30404a; stroke-width: .5; }
 .dimension-text { fill: #d8e2e5; font-size: 5px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
@@ -116,6 +117,8 @@ button { color: inherit; }
 .progress-action { width: 100%; margin-top: 3px; }
 .continuity-note { margin-top: 10px; text-align: center; color: #75858e; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
 .section-copy { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.vertex-guidance { display: flex; align-items: center; gap: 9px; margin-top: 13px; padding: 9px 10px; border: 1px solid #2c373d; border-radius: 7px; background: #0e1317; color: var(--muted); font-size: 10px; line-height: 1.35; }
+.merge-symbol { flex: 0 0 auto; width: 10px; height: 10px; border: 2px solid var(--accent); border-radius: 2px; transform: rotate(45deg); box-shadow: 0 0 8px rgb(216 255 98 / 45%); }
 .metric-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
 .metric { background: #0e1317; border: 1px solid #202a30; border-radius: 8px; padding: 11px; }
 .metric-label { color: var(--muted); font-size: 10px; }
