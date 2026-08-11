@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { findSelfIntersections, polygonArea, polygonPerimeter, snapPoint } from '../src/core/geometry/vector.js';
+import { formatInches } from '../src/core/units/length.js';
 
 test('calculates area and perimeter for an axis-aligned boundary', () => {
   const rectangle = [{ x: 0, y: 0 }, { x: 192, y: 0 }, { x: 192, y: 144 }, { x: 0, y: 144 }];
@@ -17,4 +18,9 @@ test('snaps to field precision and an adjacent axis', () => {
   const result = snapPoint({ x: 24.2, y: 48.1 }, { x: 12, y: 48 }, { grid: .5, axisThreshold: 1 });
   assert.deepEqual(result.point, { x: 24, y: 48 });
   assert.deepEqual(result.guides, ['horizontal']);
+});
+
+test('formats Level Down measurements in inches without rounding away half inches', () => {
+  assert.equal(formatInches(7.5), '7.5″');
+  assert.equal(formatInches(11), '11″');
 });

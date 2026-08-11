@@ -10,6 +10,12 @@ export function formatFeetInches(totalInches, precision = 1) {
   return `${sign}${feet}′ ${inchText}″`;
 }
 
+export function formatInches(totalInches, maximumFractionDigits = 2) {
+  if (!Number.isFinite(totalInches)) return '—';
+  const fixed = Number(totalInches.toFixed(maximumFractionDigits)).toString();
+  return `${fixed}″`;
+}
+
 export function squareInchesToSquareFeet(area) {
   return area / (INCHES_PER_FOOT * INCHES_PER_FOOT);
 }

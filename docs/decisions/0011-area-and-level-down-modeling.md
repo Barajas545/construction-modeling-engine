@@ -10,6 +10,8 @@ House Attachment remains a construction relationship owned by the selected bound
 
 Level Down is stored as an independent construction polyline hosted by Deck Boundary. Its endpoints must attach to boundary construction geometry, while intermediate vertices may use enabled grid snaps. One riser height belongs to the complete polyline. Segment division preserves the owner and shared riser.
 
+The polyline and one Deck Boundary path derive a lowered region. The smaller valid region is selected by default and can be flipped. Nested regions accumulate their drops from the main deck elevation. The region's selectable Dimensions-layer annotation displays only a down arrow and total inches, with a live leader when displaced. Picture Frame and Fascia remain structured Level Down finish properties.
+
 ## Consequences
 
 - Area visibility and position remain annotation concerns and do not alter model geometry.

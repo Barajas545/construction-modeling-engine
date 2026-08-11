@@ -20,6 +20,8 @@ Deck Boundary now presents its computed surface area as a centered, selectable D
 
 **Level Down** introduces an independent, serializable construction polyline for changes in deck elevation. A run begins and ends on Deck Boundary geometry, may contain intermediate snapped points, and owns one shared riser height (7.5 inches by default). Any selected section can be divided into two or three equal sections without changing the owning Level Down or its riser. Multiple Level Down objects can coexist, and their operations intentionally do not regenerate or move Railing posts.
 
+Each Level Down now closes a selectable lowered region against the Deck Boundary, whether the polyline lies inside or outside the main footprint. Lower regions receive progressively darker shading based on their accumulated drop from the main deck. Their Dimensions-layer annotation shows only a down arrow and inches; it can be dragged freely and gains a live leader arrow back to its owning region. Selecting that annotation exposes 90-degree cleanup, side flipping, Picture Frame, Fascia, exact step drop, visibility, and deletion actions. Nested regions accumulate their step drops while Railing remains independent.
+
 ## Run the workspace
 
 Use `npm start`, then open `http://localhost:4173`. The workspace stores the active project locally in the browser and can export a portable `.cme.json` project file.

@@ -101,10 +101,16 @@ button { color: inherit; }
 .dimension-text.area { fill: #fff; font-weight: 800; letter-spacing: .08em; }
 .level-down-line { stroke: #e8f4f7; stroke-width: 2.5; stroke-dasharray: 7 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .level-down-line.selected { stroke: var(--accent); stroke-width: 4; }
+.level-down-region { fill: #061014; stroke: none; pointer-events: none; }
 .level-down-hit { stroke: transparent; stroke-width: 18; vector-effect: non-scaling-stroke; cursor: pointer; }
 .level-down-preview { stroke: var(--accent); stroke-width: 2.5; stroke-dasharray: 6 3; vector-effect: non-scaling-stroke; }
 .level-down-marker { fill: #0d1114; stroke: var(--accent); stroke-width: 1.5; vector-effect: non-scaling-stroke; }
-.level-down-label { fill: #e8f4f7; paint-order: stroke; stroke: #0d1114; stroke-width: 4; stroke-linejoin: round; font-size: 7px; font-weight: 800; text-anchor: middle; letter-spacing: .08em; pointer-events: none; }
+.dimension-bg.level-down { fill: #10171b; stroke: #9ab0ba; }
+.dimension-text.level-down { fill: #fff; font-weight: 800; font-size: 8px; }
+.level-down-leader { stroke: #a7bec8; stroke-width: 1.25; stroke-dasharray: 4 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+.level-down-leader-arrow { fill: #a7bec8; pointer-events: none; }
+.level-down-picture-frame { stroke: #d5e5ea; stroke-width: 5; opacity: .65; vector-effect: non-scaling-stroke; pointer-events: none; }
+.level-down-fascia { stroke: var(--accent); stroke-width: 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .dimension-text { fill: #d8e2e5; font-size: 5px; font-weight: 700; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
 .preview-line { stroke: var(--accent); stroke-width: 1.2; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; }
 .guide-line { stroke: rgb(216 255 98 / 55%); stroke-width: .7; stroke-dasharray: 2 2; }
