@@ -189,6 +189,17 @@ function renderContextPanel(current) {
   return '';
 }
 
+function refreshContextPanel() {
+  const inspector = app.querySelector('.inspector');
+  if (!inspector) return;
+  inspector.querySelector(':scope > .context-object-panel')?.remove();
+  const markup = renderContextPanel(boundary());
+  if (!markup) return;
+  inspector.insertAdjacentHTML('afterbegin', markup);
+  const panel = inspector.querySelector(':scope > .context-object-panel');
+  panel?.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button.dataset.action)));
+}
+
 function renderLevelDownContext(levelDown, region, deckingVisible, close, selectedByDimension, segmentLength = null) {
   const finishes = levelDown.properties?.finishes ?? {};
   const totalDepth = getLevelDownDepth(levelDown);
@@ -907,7 +918,9 @@ function canvasPointerDown(svg, event) {
     dragStartDocument = documentModel;
     mergeCandidateId = null;
     svg.setPointerCapture(event.pointerId);
+    refreshContextPanel();
     drawCanvasRefresh();
+    updateStatusMessage();
     return;
   }
   if (mode === 'select' && edgeId) {
@@ -920,7 +933,9 @@ function canvasPointerDown(svg, event) {
     draggingEdgeId = edgeId;
     edgeDragStart = { document: documentModel, boundary: boundary(), point: screenToWorld(svg, event), moved: false };
     svg.setPointerCapture(event.pointerId);
+    refreshContextPanel();
     drawCanvasRefresh();
+    updateStatusMessage();
     return;
   }
   if (mode === 'stair' && edgeId) {
