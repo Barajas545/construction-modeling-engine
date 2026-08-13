@@ -13,4 +13,5 @@ export * from './core/units/length.js';
 export * from './core/units/parse-length.js';
 export * from './rendering/viewport-controller.js';
 export * from './tools/deck-boundary/deck-boundary.js';
+export * from './core/construction-objects/multi-deck-project.js';
 export * from './tools/stairs/stair.js';

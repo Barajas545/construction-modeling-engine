@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeckBoundary, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
-import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../src/tools/stairs/stair.js';
+import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairTreads, findStairBoundaryConnection, getStairInterfaceEdge, setStairWidth, synchronizeConnectedStairLevels, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../src/tools/stairs/stair.js';
 
 function ids() { let count = 0; return (prefix) => `${prefix}-${++count}`; }
 
@@ -38,6 +38,27 @@ test('dragging outward from a boundary edge derives a live stair definition', ()
   assert.equal(attached.stair.dimensions.totalRun, 40);
   assert.equal(attached.stair.dimensions.riserCount, 5);
   assert.equal(deriveStairTreads(attached.boundary, attached.stair).length, 4);
+});
+
+test('stairs recognize a parallel lower Deck Boundary as a connected landing', () => {
+  const makeId = ids();
+  const source = createDeckBoundary([{ x: 0, y: 0 }, { x: 192, y: 0 }, { x: 192, y: 144 }, { x: 0, y: 144 }], { idFactory: makeId });
+  const target = createDeckBoundary([{ x: 0, y: -84 }, { x: 192, y: -84 }, { x: 192, y: -60 }, { x: 0, y: -60 }], { idFactory: makeId, metadata: { levelDownInches: 30 } });
+  const connection = findStairBoundaryConnection(source, source.edges[0].id, { width: 36, startOffset: 78 }, [target], { x: 96, y: -60 });
+  assert.equal(connection.boundaryId, target.id);
+  assert.equal(connection.edgeId, target.edges[2].id);
+  assert.equal(connection.totalRise, 30);
+  assert.equal(connection.totalRun, 60);
+  assert.ok(connection.riserHeight <= 7.5);
+  assert.ok(connection.treadDepth <= 11);
+  const attached = attachStairToBoundary(source, source.edges[0].id, { width: 36, startOffset: 78, ...connection, destination: { boundaryId: connection.boundaryId, edgeId: connection.edgeId } }, makeId);
+  assert.equal(attached.stair.destination.boundaryId, target.id);
+  assert.equal(attached.stair.destination.relationship, 'lower-deck-landing');
+  target.metadata.levelDownInches = 36;
+  const synchronized = synchronizeConnectedStairLevels({ objects: [source, target, attached.stair] });
+  const updatedStair = synchronized.objects.find((object) => object.type === 'stair');
+  assert.equal(updatedStair.dimensions.totalRise, 36);
+  assert.ok(updatedStair.dimensions.riserHeight <= 7.5);
 });
 
 test('stair sides snap simply to adjacent boundary nodes', () => {

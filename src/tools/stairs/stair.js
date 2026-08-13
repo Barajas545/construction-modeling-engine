@@ -80,6 +80,90 @@ export function deriveStairDragOptions(boundary, edgeId, pointer, width = 36, st
   return layout ? { width, startOffset, ...layout } : null;
 }
 
+export function findStairBoundaryConnection(sourceBoundary, edgeId, opening, candidateBoundaries, pointer, tolerance = 18) {
+  const edgeIndex = sourceBoundary.edges.findIndex((edge) => edge.id === edgeId);
+  if (edgeIndex < 0) return null;
+  const start = sourceBoundary.vertices[edgeIndex];
+  const end = sourceBoundary.vertices[(edgeIndex + 1) % sourceBoundary.vertices.length];
+  const edgeLength = distance(start, end);
+  const unit = { x: (end.x - start.x) / edgeLength, y: (end.y - start.y) / edgeLength };
+  const outwardSign = signedTwiceArea(sourceBoundary.vertices) >= 0 ? 1 : -1;
+  const normal = { x: unit.y * outwardSign, y: -unit.x * outwardSign };
+  const openingStart = opening.startOffset ?? (edgeLength - opening.width) / 2;
+  const openingEnd = openingStart + opening.width;
+  const sourceLevel = Math.max(0, Number(sourceBoundary.metadata?.levelDownInches ?? 0));
+  const candidates = [];
+  for (const boundary of candidateBoundaries.filter((entry) => entry.id !== sourceBoundary.id)) {
+    const targetLevel = Math.max(0, Number(boundary.metadata?.levelDownInches ?? 0));
+    const totalRise = targetLevel - sourceLevel;
+    if (totalRise <= 0) continue;
+    boundary.edges.forEach((edge, index) => {
+      const a = boundary.vertices[index];
+      const b = boundary.vertices[(index + 1) % boundary.vertices.length];
+      const targetLength = distance(a, b);
+      const targetUnit = { x: (b.x - a.x) / targetLength, y: (b.y - a.y) / targetLength };
+      if (Math.abs(unit.x * targetUnit.x + unit.y * targetUnit.y) < .985) return;
+      const projected = nearestOnSegment(pointer, a, b);
+      const pointerDistance = distance(pointer, projected.point);
+      if (pointerDistance > tolerance) return;
+      const run = (projected.point.x - start.x) * normal.x + (projected.point.y - start.y) * normal.y;
+      if (run < 12) return;
+      const targetFirst = (a.x - start.x) * unit.x + (a.y - start.y) * unit.y;
+      const targetSecond = (b.x - start.x) * unit.x + (b.y - start.y) * unit.y;
+      const targetMin = Math.min(targetFirst, targetSecond) - tolerance;
+      const targetMax = Math.max(targetFirst, targetSecond) + tolerance;
+      if (openingStart < targetMin || openingEnd > targetMax) return;
+      const riserCount = Math.max(2, Math.ceil(totalRise / MAX_RISER_HEIGHT), Math.ceil(run / MAX_TREAD_DEPTH) + 1);
+      const treadCount = riserCount - 1;
+      candidates.push({
+        boundaryId: boundary.id,
+        edgeId: edge.id,
+        totalRise,
+        totalRun: run,
+        riserCount,
+        treadCount,
+        riserHeight: totalRise / riserCount,
+        treadDepth: run / treadCount,
+        distance: pointerDistance,
+      });
+    });
+  }
+  return candidates.sort((a, b) => a.distance - b.distance)[0] ?? null;
+}
+
+export function synchronizeConnectedStairLevels(document) {
+  const boundaries = new Map(document.objects.filter((object) => object.type === 'deck-boundary').map((boundary) => [boundary.id, boundary]));
+  return {
+    ...document,
+    objects: document.objects.map((object) => {
+      if (object.type !== STAIR_TYPE || !object.destination?.boundaryId) return object;
+      const source = boundaries.get(object.host?.boundaryId);
+      const destination = boundaries.get(object.destination.boundaryId);
+      if (!source || !destination) return { ...object, lifecycle: { ...object.lifecycle, needsReview: true } };
+      const sourceLevel = Math.max(0, Number(source.metadata?.levelDownInches ?? 0));
+      const destinationLevel = Math.max(0, Number(destination.metadata?.levelDownInches ?? 0));
+      const totalRise = destinationLevel - sourceLevel;
+      if (totalRise <= 0) return { ...object, lifecycle: { ...object.lifecycle, needsReview: true } };
+      const totalRun = object.dimensions.totalRun;
+      const riserCount = Math.max(2, Math.ceil(totalRise / MAX_RISER_HEIGHT), Math.ceil(totalRun / MAX_TREAD_DEPTH) + 1);
+      const treadCount = riserCount - 1;
+      return {
+        ...object,
+        dimensions: { ...object.dimensions, totalRise, riserCount, treadCount, stepCount: riserCount, riserHeight: totalRise / riserCount, treadDepth: totalRun / treadCount },
+        lifecycle: { ...object.lifecycle, revision: (object.lifecycle?.revision ?? 1) + 1, needsReview: false },
+      };
+    }),
+  };
+}
+
+function nearestOnSegment(point, start, end) {
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const denominator = dx * dx + dy * dy;
+  const t = denominator ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / denominator)) : 0;
+  return { point: { x: start.x + dx * t, y: start.y + dy * t }, t };
+}
+
 export function validateStairPlacement(boundary, edgeId, options) {
   const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
   if (edgeIndex < 0) return { valid: false, issues: ['Select a valid Deck Boundary edge.'] };
@@ -153,6 +237,7 @@ export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory 
     id: stairId,
     name: options.name ?? 'Main stairs',
     host: { boundaryId: boundary.id, sourceEdgeId: edgeId },
+    destination: settings.destination ? { ...settings.destination, relationship: 'lower-deck-landing' } : null,
     anchors: { openingStartVertexId: openingStart.id, outerStartVertexId: outerStart.id, outerEndVertexId: outerEnd.id, openingEndVertexId: openingEnd.id },
     interfaceEdge: normalizeBoundaryEdge({
       type: 'stair-interface-edge',

@@ -15,10 +15,11 @@ export function getNextWorkflowStage(document) {
 }
 
 export function deriveModelProgress(document) {
-  const boundary = document.objects.find((object) => object.type === 'deck-boundary');
+  const boundaries = document.objects.filter((object) => object.type === 'deck-boundary');
+  const boundary = boundaries[0];
   const stairs = document.objects.filter((object) => object.type === 'stair');
   const railings = document.objects.filter((object) => object.type === 'railing-run');
-  const established = boundary?.lifecycle?.phase === 'established';
+  const established = boundaries.length > 0 && boundaries.every((entry) => entry.lifecycle?.phase === 'established');
   const milestones = [
     { id: 'boundary', label: 'Deck footprint', state: established ? 'complete' : boundary ? 'review' : 'next' },
     { id: 'relationships', label: 'Primary relationships', state: stairs.length || railings.length ? 'complete' : established ? 'next' : 'future' },
