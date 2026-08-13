@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { constrainEdge, createDeckBoundary, offsetEdge, setEdgeLength, updateEdgeProperties } from '../src/tools/deck-boundary/deck-boundary.js';
+import { constrainEdge, createDeckBoundary, isEdgeLocked, offsetEdge, setEdgeLength, setEdgeLocked, splitEdgeIntoSegments, updateEdgeProperties } from '../src/tools/deck-boundary/deck-boundary.js';
 
 let counter = 0;
 const idFactory = (prefix) => `${prefix}-${++counter}`;
@@ -39,4 +39,17 @@ test('edge editing supports exact length, offset, and geometric relations', () =
   const horizontal = constrainEdge(boundary, edgeId, 'horizontal');
   assert.equal(horizontal.vertices[0].y, horizontal.vertices[1].y);
   assert.equal(horizontal.edges[0].properties.custom.geometricConstraint, 'horizontal');
+});
+
+test('locked construction edges reject movement, length, splitting, and constraints', () => {
+  const boundary = makeBoundary();
+  const edgeId = boundary.edges[0].id;
+  const locked = setEdgeLocked(boundary, edgeId, true);
+  assert.equal(isEdgeLocked(locked, edgeId), true);
+  assert.throws(() => setEdgeLength(locked, edgeId, 144), /unlock/i);
+  assert.throws(() => offsetEdge(locked, edgeId, 12), /unlock/i);
+  assert.throws(() => constrainEdge(locked, edgeId, 'horizontal'), /unlock/i);
+  assert.throws(() => splitEdgeIntoSegments(locked, edgeId, 2, idFactory), /unlock/i);
+  const unlocked = setEdgeLocked(locked, edgeId, false);
+  assert.equal(isEdgeLocked(unlocked, edgeId), false);
 });

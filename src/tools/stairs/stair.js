@@ -98,6 +98,7 @@ export function validateStairPlacement(boundary, edgeId, options) {
     if (riserHeight > MAX_RISER_HEIGHT) issues.push('Each stair riser must be 7.5 inches or less.');
   }
   if (boundary.edges[edgeIndex]?.properties?.attachments?.stairId) issues.push('This edge already belongs to a staircase.');
+  if (boundary.edges[edgeIndex]?.properties?.custom?.locked) issues.push('Unlock this construction edge before attaching stairs.');
   return { valid: issues.length === 0, issues, edgeLength };
 }
 
@@ -195,6 +196,9 @@ export function setStairWidth(boundary, stair, width) {
   if (stair.dimensions.snappedStart || stair.dimensions.snappedEnd) throw new Error('This stair side is snapped to an adjacent node. Move the node to change its width.');
   const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
   const anchors = stair.anchors;
+  const controlledIds = new Set(Object.values(anchors));
+  if (boundary.vertices.some((vertex) => controlledIds.has(vertex.id) && vertex.locked)) throw new Error('Unlock the connected stair node before changing its width.');
+  if (boundary.edges.some((edge) => edge.properties?.custom?.locked && (controlledIds.has(edge.startVertexId) || controlledIds.has(edge.endVertexId)))) throw new Error('Unlock the connected construction edge before changing stair width.');
   const topStart = byId.get(anchors.openingStartVertexId);
   const outerStart = byId.get(anchors.outerStartVertexId);
   const outerEnd = byId.get(anchors.outerEndVertexId);

@@ -10,7 +10,7 @@ import { formatFeetInches, formatInches, formatSquareFeet } from '../core/units/
 import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
-import { constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, insertVertex, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeRole, splitEdgeIntoSegments, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { chamferVertex, constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairTreads, getStairInterfaceEdge, setStairWidth, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
@@ -47,6 +47,9 @@ let stairGesture = null;
 let dimensionDragStart = null;
 let dimensionLeaderMode = null;
 let dimensionLeaderGesture = null;
+let chamferMode = null;
+let chamferGesture = null;
+let chamferDraft = null;
 let railingDraft = null;
 let railingGesture = null;
 let levelDownDraft = [];
@@ -154,7 +157,8 @@ function renderContextPanel(current) {
     const properties = normalizeBoundaryEdge(edge).properties;
     const dimensionVisible = getDimensionLayer(documentModel).visible && isDimensionReferenceVisible(documentModel, edge.id);
     const breakDisabled = edgeHasRailingDependency(edge.id);
-    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction edge</div><h2>${formatFeetInches(length)}</h2></div>${close}</div><div class="context-actions context-actions-3"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="break-edge-2" ${breakDisabled ? 'disabled' : ''}>Break ×2</button><button class="button" data-action="break-edge-3" ${breakDisabled ? 'disabled' : ''}>Break ×3</button></div><button class="button context-full ${dimensionLeaderMode?.referenceId === edge.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><div class="context-actions context-actions-3"><button class="button ${edge.role === 'house' ? 'active-constraint' : ''}" data-action="quick-house-attachment">House attachment</button><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div><button class="button context-full" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button>${breakDisabled ? '<div class="context-note">Remove connected railing before dividing this edge.</div>' : ''}</section>`;
+    const locked = isEdgeLocked(current, edge.id);
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction edge</div><h2>${locked ? '⚓ ' : ''}${formatFeetInches(length)}</h2></div>${close}</div><div class="context-actions"><button class="button ${locked ? 'active-constraint' : ''}" data-action="${locked ? 'unlock-edge' : 'lock-edge'}">${locked ? 'Unlock edge' : 'Lock edge'}</button><button class="button ${dimensionLeaderMode?.referenceId === edge.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button></div><div class="context-actions context-actions-3"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="break-edge-2" ${breakDisabled || locked ? 'disabled' : ''}>Break ×2</button><button class="button" data-action="break-edge-3" ${breakDisabled || locked ? 'disabled' : ''}>Break ×3</button></div><div class="context-actions context-actions-3"><button class="button ${edge.role === 'house' ? 'active-constraint' : ''}" data-action="quick-house-attachment">House attachment</button><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div><button class="button context-full" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button>${locked ? '<div class="context-note">This edge cannot move, change length, split, or accept geometry constraints until unlocked.</div>' : breakDisabled ? '<div class="context-note">Remove connected railing before dividing this edge.</div>' : ''}</section>`;
   }
   if (selected.kind === 'stair-edge') {
     const reference = findStairInterfaceByEdgeId(selected.id);
@@ -163,7 +167,13 @@ function renderContextPanel(current) {
     const dimensionVisible = getDimensionLayer(documentModel).visible && isDimensionReferenceVisible(documentModel, reference.edge.id);
     return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected stair interface</div><h2>Deck–Stair line</h2></div>${close}</div><div class="context-actions"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button></div><div class="context-actions"><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div></section>`;
   }
-  if (selected.kind === 'vertex') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected corner</div><h2>Boundary vertex</h2></div>${close}</div><div class="context-actions"><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Delete corner</button></div></section>`;
+  if (selected.kind === 'vertex') {
+    const locked = isVertexLocked(current, selected.id);
+    const index = current.vertices.findIndex((vertex) => vertex.id === selected.id);
+    const adjacentLocked = [current.edges[index], current.edges[(index - 1 + current.edges.length) % current.edges.length]].some((edge) => isEdgeLocked(current, edge.id));
+    const referenced = isVertexReferencedByAttachment(selected.id);
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected corner</div><h2>${locked ? '⚓ Locked node' : 'Boundary node'}</h2></div>${close}</div><div class="context-actions"><button class="button primary" data-action="start-45-chamfer" ${locked || adjacentLocked || referenced ? 'disabled' : ''}>45° Chamfer</button><button class="button ${locked ? 'active-constraint' : ''}" data-action="${locked ? 'unlock-vertex' : 'lock-vertex'}">${locked ? 'Unlock' : 'Lock in place'}</button></div><div class="context-actions"><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 || locked || adjacentLocked || referenced ? 'disabled' : ''}>Delete node</button></div><div class="context-note">${referenced ? 'This node anchors another construction object and cannot be replaced.' : '45° Chamfer: drag anywhere to set an equal setback on both connected edges with live dimensions.'}</div></section>`;
+  }
   if (selected.kind === 'dimension') {
     const reference = resolveDimensionReference(selected.id);
     if (reference?.kind === 'area') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(current.computed.areaSquareInches)}</h2></div>${close}</div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button primary" data-action="start-level-down">Add level down</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div><button class="button context-full" data-action="reset-dimension-position">Reset area position</button><div class="context-note">Level Down starts and ends on the Deck Boundary. Intermediate clicks create a polyline.</div></section>`;
@@ -424,7 +434,9 @@ function drawCanvas(svg, current, validation) {
   svg.append(defs, svgElement('rect', { x: viewport.x, y: viewport.y, width: viewport.width, height: viewport.height, fill: gridVisible ? 'url(#majorGrid)' : '#0d1114' }));
   svg.append(svgElement('line', { x1: viewport.x, y1: '0', x2: viewport.x + viewport.width, y2: '0', class: 'axis-line' }), svgElement('line', { x1: '0', y1: viewport.y, x2: '0', y2: viewport.y + viewport.height, class: 'axis-line' }));
   if (current) {
-    renderBoundarySvg(svg, current, validation);
+    const visibleBoundary = chamferDraft?.boundary ?? current;
+    renderBoundarySvg(svg, visibleBoundary, validateDeckBoundary(visibleBoundary));
+    if (chamferDraft) renderChamferDimension(svg, chamferDraft);
     renderStairGraphics(svg, current);
     renderStairPreview(svg, current);
     renderLevelDownGraphics(svg, current);
@@ -529,6 +541,11 @@ function renderBoundarySvg(svg, current, validation) {
   current.vertices.forEach((vertex) => {
     svg.append(svgElement('rect', { x: vertex.x - hitSize / 2, y: vertex.y - hitSize / 2, width: hitSize, height: hitSize, class: 'vertex-hit', 'data-vertex-id': vertex.id }));
     svg.append(svgElement('rect', { x: vertex.x - markerSize / 2, y: vertex.y - markerSize / 2, width: markerSize, height: markerSize, rx: markerSize * .12, class: `vertex ${selected.kind === 'vertex' && selected.id === vertex.id ? 'selected' : ''} ${mergeCandidateId === vertex.id ? 'merge-ready' : ''}`, transform: `rotate(45 ${vertex.x} ${vertex.y})` }));
+    if (vertex.locked) {
+      const lock = svgElement('text', { x: vertex.x + markerSize * 1.15, y: vertex.y - markerSize * .9, class: 'constraint-anchor vertex-anchor' });
+      lock.textContent = '⚓';
+      svg.append(lock);
+    }
   });
   if (getDimensionLayer(documentModel).visible) renderAreaDimension(svg, current);
 }
@@ -647,7 +664,8 @@ function addDimension(svg, start, end, referenceId) {
   if (length < 12) return;
   const offsetX = (-dy / length) * 8;
   const offsetY = (dx / length) * 8;
-  const label = formatFeetInches(length);
+  const locked = boundary()?.edges.some((edge) => edge.id === referenceId) && isEdgeLocked(boundary(), referenceId);
+  const label = `${locked ? '⚓ ' : ''}${formatFeetInches(length)}`;
   const width = Math.max(25, label.length * 3.3);
   const annotationOffset = getDimensionOffset(documentModel, referenceId);
   const leaderOffset = getDimensionLeaderOffset(documentModel, referenceId);
@@ -662,6 +680,22 @@ function addDimension(svg, start, end, referenceId) {
   text.textContent = label;
   group.append(text);
   svg.append(group);
+}
+
+function renderChamferDimension(svg, draft) {
+  const edge = draft.boundary.edges.find((entry) => entry.id === draft.chamferEdgeId);
+  if (!edge) return;
+  const byId = new Map(draft.boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  const start = byId.get(edge.startVertexId);
+  const end = byId.get(edge.endVertexId);
+  if (!start || !end) return;
+  const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+  const label = `45° · ${formatInches(draft.setback)}`;
+  const width = Math.max(38, label.length * 4);
+  svg.append(svgElement('rect', { x: midpoint.x - width / 2, y: midpoint.y - 16, width, height: 12, rx: 3, class: 'chamfer-dimension-bg' }));
+  const text = svgElement('text', { x: midpoint.x, y: midpoint.y - 8, class: 'chamfer-dimension-text' });
+  text.textContent = label;
+  svg.append(text);
 }
 
 function renderDimensionLeader(svg, labelPoint, tip, referenceId) {
@@ -757,6 +791,9 @@ function setMode(nextMode) {
   mode = nextMode;
   dimensionLeaderMode = null;
   dimensionLeaderGesture = null;
+  chamferMode = null;
+  chamferGesture = null;
+  chamferDraft = null;
   numericBuffer = '';
   stairGesture = null;
   railingGesture = null;
@@ -784,6 +821,13 @@ function canvasPointerDown(svg, event) {
   const dimensionId = event.target.dataset.dimensionId;
   const railingId = event.target.dataset.railingId;
   const levelDownSegmentId = event.target.dataset.levelDownSegmentId;
+  if (chamferMode && event.button === 0) {
+    event.preventDefault();
+    chamferGesture = { pointerId: event.pointerId, document: documentModel, vertexId: chamferMode.vertexId };
+    updateChamferDraft(screenToWorld(svg, event));
+    svg.setPointerCapture(event.pointerId);
+    return;
+  }
   if (dimensionLeaderMode && event.button === 0) {
     event.preventDefault();
     const anchor = getDimensionObjectAnchor(dimensionLeaderMode.referenceId);
@@ -856,6 +900,9 @@ function canvasPointerDown(svg, event) {
   }
   if (mode === 'select' && vertexId) {
     selected = { kind: 'vertex', id: vertexId };
+    if (isVertexLocked(boundary(), vertexId)) { message = 'Node is locked in place'; render(); return; }
+    const vertexIndex = boundary().vertices.findIndex((vertex) => vertex.id === vertexId);
+    if ([boundary().edges[vertexIndex], boundary().edges[(vertexIndex - 1 + boundary().edges.length) % boundary().edges.length]].some((edge) => isEdgeLocked(boundary(), edge.id))) { message = 'A connected construction edge is locked'; render(); return; }
     draggingVertexId = vertexId;
     dragStartDocument = documentModel;
     mergeCandidateId = null;
@@ -865,6 +912,11 @@ function canvasPointerDown(svg, event) {
   }
   if (mode === 'select' && edgeId) {
     selected = { kind: 'edge', id: edgeId };
+    if (isEdgeLocked(boundary(), edgeId)) { message = 'Construction edge is locked'; render(); return; }
+    const edgeIndex = boundary().edges.findIndex((edge) => edge.id === edgeId);
+    const endpointLocked = [boundary().vertices[edgeIndex], boundary().vertices[(edgeIndex + 1) % boundary().vertices.length]].some((vertex) => vertex?.locked);
+    const neighborLocked = [boundary().edges[(edgeIndex - 1 + boundary().edges.length) % boundary().edges.length], boundary().edges[(edgeIndex + 1) % boundary().edges.length]].some((edge) => isEdgeLocked(boundary(), edge.id));
+    if (endpointLocked || neighborLocked) { message = 'Unlock connected nodes and edges before moving this construction edge'; render(); return; }
     draggingEdgeId = edgeId;
     edgeDragStart = { document: documentModel, boundary: boundary(), point: screenToWorld(svg, event), moved: false };
     svg.setPointerCapture(event.pointerId);
@@ -873,6 +925,7 @@ function canvasPointerDown(svg, event) {
   }
   if (mode === 'stair' && edgeId) {
     const current = boundary();
+    if (isEdgeLocked(current, edgeId)) { message = 'Unlock this construction edge before attaching a staircase'; updateStatusMessage(); return; }
     const edgeIndex = current.edges.findIndex((edge) => edge.id === edgeId);
     const edgeLength = Math.hypot(
       current.vertices[(edgeIndex + 1) % current.vertices.length].x - current.vertices[edgeIndex].x,
@@ -921,6 +974,25 @@ function placeDraftPoint(raw) {
   numericBuffer = '';
   message = draft.length < 3 ? 'Continue to the next corner' : 'Click the first corner or press Enter to close';
   render();
+}
+
+function updateChamferDraft(raw) {
+  const source = chamferGesture?.document.objects.find((object) => object.type === 'deck-boundary');
+  const corner = source?.vertices.find((vertex) => vertex.id === chamferGesture?.vertexId);
+  if (!source || !corner) return;
+  const index = source.vertices.findIndex((vertex) => vertex.id === corner.id);
+  const previous = source.vertices[(index - 1 + source.vertices.length) % source.vertices.length];
+  const next = source.vertices[(index + 1) % source.vertices.length];
+  const maximum = Math.min(Math.hypot(previous.x - corner.x, previous.y - corner.y), Math.hypot(next.x - corner.x, next.y - corner.y)) - 6;
+  const requested = Math.hypot(raw.x - corner.x, raw.y - corner.y);
+  const setback = Math.max(6, Math.min(maximum, Math.round(requested * 2) / 2));
+  if (maximum < 6) { message = 'Connected edges are too short for a chamfer'; updateStatusMessage(); return; }
+  try {
+    chamferDraft = chamferVertex(source, corner.id, setback);
+    message = `45° chamfer · ${formatInches(setback)} setback · release to apply`;
+    drawCanvasRefresh();
+    updateStatusMessage();
+  } catch (error) { chamferDraft = null; message = error.message; updateStatusMessage(); }
 }
 
 function placeLevelDownPoint(raw) {
@@ -981,6 +1053,10 @@ function canvasPointerMove(svg, event) {
     return;
   }
   const raw = screenToWorld(svg, event);
+  if (chamferGesture?.pointerId === event.pointerId) {
+    updateChamferDraft(raw);
+    return;
+  }
   if (dimensionLeaderGesture?.pointerId === event.pointerId) {
     documentModel = setDimensionLeaderOffset(dimensionLeaderGesture.document, dimensionLeaderGesture.referenceId, { x: raw.x - dimensionLeaderGesture.anchor.x, y: raw.y - dimensionLeaderGesture.anchor.y });
     persist();
@@ -1111,6 +1187,24 @@ function finishPointerGesture(svg, event) {
     } else {
       message = 'Dimension arrow repositioned · object relationship preserved';
       commit(finalDocument, 'Reposition dimension arrow');
+    }
+    return;
+  }
+  if (chamferGesture?.pointerId === event.pointerId) {
+    const gesture = chamferGesture;
+    const preview = chamferDraft;
+    chamferGesture = null;
+    chamferMode = null;
+    chamferDraft = null;
+    documentModel = gesture.document;
+    if (event.type === 'pointercancel' || !preview) {
+      message = event.type === 'pointercancel' ? 'Chamfer canceled' : 'Drag farther to create a chamfer';
+      persist();
+      render();
+    } else {
+      selected = { kind: 'edge', id: preview.chamferEdgeId };
+      message = `45° chamfer created · ${formatInches(preview.setback)} setback`;
+      commit(upsertObject(documentModel, markBoundaryEdited(preview.boundary)), 'Create 45-degree boundary chamfer');
     }
     return;
   }
@@ -1322,7 +1416,7 @@ function toggleSelectedDimension() {
 }
 
 function breakSelectedEdge(segmentCount) {
-  if (selected.kind !== 'edge' || edgeHasRailingDependency(selected.id)) return;
+  if (selected.kind !== 'edge' || edgeHasRailingDependency(selected.id) || isEdgeLocked(boundary(), selected.id)) return;
   const divided = markBoundaryEdited(splitEdgeIntoSegments(boundary(), selected.id, segmentCount));
   message = `Construction edge divided into ${segmentCount} equal segments`;
   commitBoundary(divided, `Divide construction edge into ${segmentCount} segments`);
@@ -1459,6 +1553,7 @@ function edgeDoubleClick(svg, event) {
   if (mode !== 'select' || !event.target.dataset.edgeId) return;
   const current = boundary();
   const edgeId = event.target.dataset.edgeId;
+  if (isEdgeLocked(current, edgeId)) { message = 'Unlock this construction edge before adding a node'; render(); return; }
   if (edgeHasRailingDependency(edgeId)) {
     message = 'Remove the hosted railing before splitting this construction edge';
     render();
@@ -1486,7 +1581,31 @@ function completeDraft() {
 }
 
 function handleAction(action) {
-  if (action === 'clear-selection') { selected = { kind: null, id: null }; dimensionLeaderMode = null; dimensionLeaderGesture = null; message = 'Ready'; render(); }
+  if (action === 'clear-selection') { selected = { kind: null, id: null }; dimensionLeaderMode = null; dimensionLeaderGesture = null; chamferMode = null; chamferGesture = null; chamferDraft = null; message = 'Ready'; render(); }
+  if (action === 'lock-edge' && selected.kind === 'edge') {
+    message = 'Construction edge locked · position and length protected';
+    commitBoundary(markBoundaryEdited(setEdgeLocked(boundary(), selected.id, true)), 'Lock construction edge');
+  }
+  if (action === 'unlock-edge' && selected.kind === 'edge') {
+    message = 'Construction edge unlocked';
+    commitBoundary(markBoundaryEdited(setEdgeLocked(boundary(), selected.id, false)), 'Unlock construction edge');
+  }
+  if (action === 'lock-vertex' && selected.kind === 'vertex') {
+    message = 'Boundary node locked in place';
+    commitBoundary(markBoundaryEdited(setVertexLocked(boundary(), selected.id, true)), 'Lock boundary node');
+  }
+  if (action === 'unlock-vertex' && selected.kind === 'vertex') {
+    message = 'Boundary node unlocked';
+    commitBoundary(markBoundaryEdited(setVertexLocked(boundary(), selected.id, false)), 'Unlock boundary node');
+  }
+  if (action === 'start-45-chamfer' && selected.kind === 'vertex') {
+    if (isVertexReferencedByAttachment(selected.id)) { message = 'This node anchors another construction object and cannot be chamfered'; render(); return; }
+    chamferMode = { vertexId: selected.id };
+    chamferGesture = null;
+    chamferDraft = null;
+    message = '45° Chamfer active · drag anywhere to set the setback';
+    render();
+  }
   if (action === 'add-railing-panel' && selected.kind === 'railing') adjustSelectedRailingPanels(1);
   if (action === 'remove-railing-panel' && selected.kind === 'railing') adjustSelectedRailingPanels(-1);
   if (action === 'toggle-decking') {
@@ -1544,12 +1663,12 @@ function handleAction(action) {
   if (action === 'apply-edge-length' && selected.kind === 'edge') {
     const length = parseConstructionLength(app.querySelector('#edge-length')?.value);
     if (!length) { message = 'Enter a valid construction length'; render(); }
-    else { message = 'Edge length updated precisely'; commitBoundary(markBoundaryEdited(setEdgeLength(boundary(), selected.id, length)), 'Set boundary edge length'); }
+    else { try { message = 'Edge length updated precisely'; commitBoundary(markBoundaryEdited(setEdgeLength(boundary(), selected.id, length)), 'Set boundary edge length'); } catch (error) { message = error.message; render(); } }
   }
   if (action === 'apply-edge-offset' && selected.kind === 'edge') {
     const offset = parseConstructionLength(app.querySelector('#edge-offset')?.value);
     if (offset === null) { message = 'Enter an offset such as 6 in or -1 ft'; render(); }
-    else { message = 'Construction edge moved'; commitBoundary(markBoundaryEdited(offsetEdge(boundary(), selected.id, offset)), 'Offset boundary edge'); }
+    else { try { message = 'Construction edge moved'; commitBoundary(markBoundaryEdited(offsetEdge(boundary(), selected.id, offset)), 'Offset boundary edge'); } catch (error) { message = error.message; render(); } }
   }
   if (action === 'apply-stair-width' && selected.kind === 'stair-edge') {
     const width = parseConstructionLength(app.querySelector('#stair-interface-width')?.value);
@@ -1565,8 +1684,8 @@ function handleAction(action) {
       } catch (error) { message = error.message; render(); }
     }
   }
-  if (action === 'constraint-horizontal' && selected.kind === 'edge') { message = 'Horizontal relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'horizontal')), 'Constrain edge horizontal'); }
-  if (action === 'constraint-vertical' && selected.kind === 'edge') { message = 'Vertical relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'vertical')), 'Constrain edge vertical'); }
+  if (action === 'constraint-horizontal' && selected.kind === 'edge') { try { message = 'Horizontal relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'horizontal')), 'Constrain edge horizontal'); } catch (error) { message = error.message; render(); } }
+  if (action === 'constraint-vertical' && selected.kind === 'edge') { try { message = 'Vertical relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'vertical')), 'Constrain edge vertical'); } catch (error) { message = error.message; render(); } }
   if (action === 'insert-midpoint' && selected.kind === 'edge') {
     const current = boundary();
     const edgeIndex = current.edges.findIndex((edge) => edge.id === selected.id);
@@ -1575,6 +1694,7 @@ function handleAction(action) {
       render();
       return;
     }
+    if (isEdgeLocked(current, selected.id)) { message = 'Unlock this construction edge before inserting a node'; render(); return; }
     const start = current.vertices[edgeIndex];
     const end = current.vertices[(edgeIndex + 1) % current.vertices.length];
     const existingVertexIds = new Set(current.vertices.map((vertex) => vertex.id));
@@ -1585,6 +1705,7 @@ function handleAction(action) {
     commitBoundary(inserted, 'Insert boundary corner');
   }
   if (action === 'start-stair' && selected.kind === 'edge') {
+    if (isEdgeLocked(boundary(), selected.id)) { message = 'Unlock this construction edge before attaching a staircase'; render(); return; }
     mode = 'stair';
     stairDraft = { edgeId: selected.id, width: 36, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0 };
     message = 'Press this edge and drag outward · release at the required total rise';
@@ -1667,7 +1788,7 @@ function handleAction(action) {
   if (action === 'redo') { documentModel = history.redo(documentModel); persist(); selected = { kind: null, id: null }; message = 'Redid change'; render(); }
   if (action === 'delete-vertex' && selected.kind === 'vertex') {
     if (isVertexReferencedByAttachment(selected.id)) { message = 'This corner anchors an attached construction object and cannot be removed yet'; render(); }
-    else { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; }
+    else { try { commitBoundary(markBoundaryEdited(removeVertex(boundary(), selected.id)), 'Remove boundary corner'); selected = { kind: null, id: null }; message = 'Corner removed'; } catch (error) { message = error.message; render(); } }
   }
   if (action === 'new-boundary') {
     const next = { ...documentModel, objects: documentModel.objects.filter((object) => !['deck-boundary', 'stair', 'railing-run', 'level-down'].includes(object.type)) };
@@ -1781,6 +1902,13 @@ function repeatLastSegment() {
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   const editingField = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+  if (event.key === 'Escape' && chamferMode) {
+    event.preventDefault();
+    chamferMode = null; chamferGesture = null; chamferDraft = null;
+    message = 'Chamfer canceled';
+    render();
+    return;
+  }
   if (event.key === 'Escape' && dimensionLeaderMode) {
     event.preventDefault();
     dimensionLeaderMode = null;

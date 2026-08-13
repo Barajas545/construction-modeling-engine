@@ -94,6 +94,10 @@ button { color: inherit; }
 .vertex.selected { fill: var(--accent); stroke: #fff; }
 .vertex.merge-ready { fill: var(--accent); stroke: #fff; stroke-width: 2.4; filter: drop-shadow(0 0 5px rgb(216 255 98 / 90%)); }
 .vertex.start { fill: var(--accent); }
+.constraint-anchor { fill: var(--accent); paint-order: stroke; stroke: #0d1114; stroke-width: 3; stroke-linejoin: round; font-size: 8px; font-weight: 800; pointer-events: none; }
+.vertex-anchor { text-anchor: middle; }
+.chamfer-dimension-bg { fill: #10161a; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.chamfer-dimension-text { fill: #fff; font-size: 7px; font-weight: 800; text-anchor: middle; pointer-events: none; }
 .dimension-annotation { cursor: grab; }
 .dimension-hit { fill: transparent; pointer-events: all; }
 .dimension-bg { fill: #10161a; stroke: #30404a; stroke-width: .5; pointer-events: all; }

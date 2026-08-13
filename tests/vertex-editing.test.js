@@ -2,8 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   createDeckBoundary,
+  chamferVertex,
   findAdjacentMergeCandidate,
   mergeAdjacentVertices,
+  isVertexLocked,
+  removeVertex,
+  setVertexLocked,
+  updateVertex,
   updateEdgeProperties,
   validateDeckBoundary,
 } from '../src/tools/deck-boundary/deck-boundary.js';
@@ -28,6 +33,39 @@ test('drag merge finds only a neighboring corner within tolerance', () => {
 
   assert.equal(findAdjacentMergeCandidate(boundary, source.id, { x: next.x + 1, y: next.y }, 2)?.id, next.id);
   assert.equal(findAdjacentMergeCandidate(boundary, source.id, boundary.vertices[3], 2), null);
+});
+
+test('locked nodes remain fixed until explicitly unlocked', () => {
+  const boundary = makeBoundary();
+  const vertexId = boundary.vertices[1].id;
+  const locked = setVertexLocked(boundary, vertexId, true);
+  assert.equal(isVertexLocked(locked, vertexId), true);
+  assert.throws(() => updateVertex(locked, vertexId, { x: 90, y: 12 }), /unlock/i);
+  assert.throws(() => removeVertex(locked, vertexId), /unlock/i);
+  assert.throws(() => chamferVertex(locked, vertexId, 12, idFactory), /unlock/i);
+  assert.equal(isVertexLocked(setVertexLocked(locked, vertexId, false), vertexId), false);
+});
+
+test('45-degree chamfer requires an orthogonal construction corner', () => {
+  const boundary = makeBoundary();
+  assert.throws(() => chamferVertex(boundary, boundary.vertices[1].id, 12, idFactory), /90/);
+});
+
+test('45-degree chamfer replaces one node with equal setbacks and preserves adjacent edge identities', () => {
+  counter = 0;
+  const boundary = createDeckBoundary([{ x: 0, y: 0 }, { x: 96, y: 0 }, { x: 96, y: 96 }, { x: 0, y: 96 }], { idFactory });
+  const vertexId = boundary.vertices[1].id;
+  const incomingEdgeId = boundary.edges[0].id;
+  const outgoingEdgeId = boundary.edges[1].id;
+  const result = chamferVertex(boundary, vertexId, 12, idFactory);
+  assert.equal(result.boundary.vertices.length, 5);
+  assert.equal(result.boundary.edges.length, 5);
+  assert.ok(result.boundary.edges.some((edge) => edge.id === incomingEdgeId));
+  assert.ok(result.boundary.edges.some((edge) => edge.id === outgoingEdgeId));
+  const chamfer = result.boundary.edges.find((edge) => edge.id === result.chamferEdgeId);
+  assert.equal(chamfer.properties.custom.geometricConstraint, '45-degree-chamfer');
+  assert.equal(chamfer.properties.custom.chamferSetback, 12);
+  assert.equal(validateDeckBoundary(result.boundary).valid, true);
 });
 
 test('merging forward removes the redundant edge while preserving the incoming edge identity and properties', () => {
