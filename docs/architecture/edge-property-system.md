@@ -21,7 +21,7 @@ Property groups currently include classification, finishes, safety, existing con
 
 Fascia, picture-frame intent, railing intent, demolition, house relationship, and Stair references enrich the existing edge. They do not create coincident independent linework.
 
-Visual representations are derived from property meaning. For example, picture frame renders as an inset board, fascia as an exterior board, and railing intent as approximately four-inch posts distributed along the edge.
+Visual representations are derived from property meaning. For example, picture frame renders as an inset board, fascia as an exterior board, railing intent as approximately four-inch posts distributed along the edge, and House Attachment as a persistent red construction edge. Selection adds emphasis without replacing that semantic color.
 
 ## Geometry editing
 
@@ -29,9 +29,11 @@ Edge operations work against stable edge IDs:
 
 - set exact length by moving the end vertex along the existing direction;
 - offset both endpoint vertices perpendicular to the edge;
-- apply horizontal or vertical relation intent;
+- apply or remove a persistent horizontal, vertical, or arbitrary fixed-angle relation;
 - drag the edge using the same offset operation;
 - split or reconnect edges while preserving identity where practical.
+
+Orientation constraints are structured custom properties. They preserve direction while allowing parallel movement and direct or indirect length changes. Connected vertex movement projects onto the constrained line, and edge offsets intersect neighboring constrained directions where a valid solution exists. Full edge locks remain stronger and disable orientation editing until released.
 
 When neighboring vertices merge, the redundant edge is removed and one adjacent edge survives. The survivor retains its ID, adopts the new endpoint, combines supported construction flags and attachments, and records the removed edge ID as provenance. Conflicting property ownership remains deterministic: the surviving edge wins unless its value is unassigned.
 

@@ -11,6 +11,7 @@
   --accent-deep: #8eae25;
   --cyan: #54d6c7;
   --danger: #ff7d6e;
+  --house-attachment: #ff4f57;
 }
 
 * { box-sizing: border-box; }
@@ -64,8 +65,9 @@ button { color: inherit; }
 .boundary-fill.invalid { fill: rgb(255 125 110 / 9%); stroke: var(--danger); }
 .boundary-edge { stroke: transparent; stroke-width: 9; vector-effect: non-scaling-stroke; cursor: pointer; }
 .boundary-edge-visible { stroke: var(--cyan); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
-.boundary-edge-visible.house { stroke: var(--accent); stroke-width: 4; }
+.boundary-edge-visible.house { stroke: var(--house-attachment); stroke-width: 4; }
 .boundary-edge-visible.selected { stroke: #fff; stroke-width: 3; }
+.boundary-edge-visible.house.selected { stroke: var(--house-attachment); stroke-width: 5; filter: drop-shadow(0 0 2px rgb(255 255 255 / 85%)); }
 .picture-frame-board { stroke: #91a4a7; stroke-width: 7; vector-effect: non-scaling-stroke; opacity: .52; }
 .fascia-board { stroke: #607177; stroke-width: 6; vector-effect: non-scaling-stroke; }
 .demolition-edge { stroke: #b3bec0; stroke-width: 2; stroke-dasharray: 7 5; vector-effect: non-scaling-stroke; opacity: .8; }
@@ -96,8 +98,13 @@ button { color: inherit; }
 .vertex.start { fill: var(--accent); }
 .constraint-anchor { fill: var(--accent); paint-order: stroke; stroke: #0d1114; stroke-width: 3; stroke-linejoin: round; font-size: 8px; font-weight: 800; pointer-events: none; }
 .vertex-anchor { text-anchor: middle; }
-.chamfer-dimension-bg { fill: #10161a; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; pointer-events: none; }
-.chamfer-dimension-text { fill: #fff; font-size: 7px; font-weight: 800; text-anchor: middle; pointer-events: none; }
+.chamfer-construction-guide { stroke: rgb(216 255 98 / 72%); stroke-width: 1; stroke-dasharray: 4 3; vector-effect: non-scaling-stroke; pointer-events: none; }
+.chamfer-original-node { fill: #0d1114; stroke: var(--accent); stroke-width: 1.6; vector-effect: non-scaling-stroke; pointer-events: none; filter: drop-shadow(0 0 3px rgb(216 255 98 / 50%)); }
+.chamfer-setback-bg { fill: #10161a; stroke: rgb(216 255 98 / 65%); stroke-width: .8; vector-effect: non-scaling-stroke; pointer-events: none; }
+.chamfer-setback-text { fill: var(--accent); font-size: 5px; font-weight: 800; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+.chamfer-angle-text { fill: var(--accent); font-size: 6px; font-weight: 850; text-anchor: middle; dominant-baseline: middle; paint-order: stroke; stroke: #0d1114; stroke-width: 3; stroke-linejoin: round; pointer-events: none; }
+.chamfer-diagonal-bg { fill: #10161a; stroke: #60717b; stroke-width: .7; vector-effect: non-scaling-stroke; pointer-events: none; }
+.chamfer-diagonal-text { fill: #fff; font-size: 5px; font-weight: 800; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
 .boundary-fill.active-deck { stroke-width: 2; }
 .stair-landing-snap { stroke: var(--accent); stroke-width: 4; stroke-dasharray: 7 4; vector-effect: non-scaling-stroke; pointer-events: none; filter: drop-shadow(0 0 5px rgb(216 255 98 / 65%)); }
 .dimension-annotation { cursor: grab; }
@@ -166,6 +173,10 @@ button { color: inherit; }
 .context-select select { width: 100%; height: 34px; border: 1px solid #354149; border-radius: 7px; background: #0c1114; color: var(--text); padding: 0 8px; }
 .context-full { width: 100%; margin-top: 8px; }
 .context-note { margin-top: 8px; color: #829299; font-size: 9px; line-height: 1.4; }
+.constraint-status { display: flex; align-items: center; gap: 6px; min-height: 25px; margin-top: 6px; border: 1px solid #263138; border-radius: 6px; background: #0d1215; padding: 5px 8px; color: #829299; font-size: 9px; }
+.constraint-status span { color: #64727a; font-size: 8px; }
+.constraint-status.active { border-color: rgb(216 255 98 / 24%); color: #c9d4d6; }
+.constraint-status.active span { color: var(--accent); }
 .inspector-section { padding: 18px; border-bottom: 1px solid var(--line); }
 .eyebrow { color: var(--accent); text-transform: uppercase; font-size: 10px; font-weight: 800; letter-spacing: .13em; }
 .inspector h2 { margin: 8px 0 5px; font-size: 18px; letter-spacing: -.02em; }
@@ -201,7 +212,10 @@ button { color: inherit; }
 .compound-field { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
 .compound-field .button { min-height: 36px; }
 .constraint-row { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 10px; }
+.constraint-row-3 { grid-template-columns: repeat(3, 1fr); }
+.constraint-row-3 .button { padding-inline: 6px; font-size: 10px; }
 .button.active-constraint { border-color: rgb(216 255 98 / 48%); color: var(--accent); background: rgb(216 255 98 / 8%); }
+.button.house-relationship-active { border-color: rgb(255 79 87 / 70%); color: #ff8b90; background: rgb(255 79 87 / 11%); box-shadow: inset 0 0 0 1px rgb(255 79 87 / 8%); }
 .property-list { display: grid; gap: 2px; margin: 14px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); padding: 7px 0; }
 .property-list label { display: flex; align-items: center; gap: 9px; padding: 7px 2px; cursor: pointer; }
 .property-list input { accent-color: var(--accent-deep); }

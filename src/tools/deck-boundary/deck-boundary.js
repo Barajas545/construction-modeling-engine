@@ -72,6 +72,19 @@ export function isEdgeLocked(boundary, edgeId) {
   return Boolean(normalizeBoundaryEdge(boundary.edges.find((edge) => edge.id === edgeId) ?? {}).properties.custom.locked);
 }
 
+export function getEdgeOrientationConstraint(boundary, edgeId) {
+  const edge = boundary.edges.find((entry) => entry.id === edgeId);
+  if (!edge) return null;
+  const custom = normalizeBoundaryEdge(edge).properties.custom;
+  const stored = custom.orientationConstraint;
+  if (stored && ['horizontal', 'vertical', 'fixed-angle'].includes(stored.type) && Number.isFinite(stored.angleRadians)) {
+    return { type: stored.type, angleRadians: Number(stored.angleRadians) };
+  }
+  if (custom.geometricConstraint === 'horizontal') return { type: 'horizontal', angleRadians: 0 };
+  if (custom.geometricConstraint === 'vertical') return { type: 'vertical', angleRadians: Math.PI / 2 };
+  return null;
+}
+
 export function setVertexLocked(boundary, vertexId, locked) {
   if (!boundary.vertices.some((vertex) => vertex.id === vertexId)) throw new Error('Boundary corner was not found.');
   return { ...boundary, vertices: boundary.vertices.map((vertex) => vertex.id === vertexId ? { ...vertex, locked: Boolean(locked) } : vertex) };
@@ -80,6 +93,62 @@ export function setVertexLocked(boundary, vertexId, locked) {
 export function setEdgeLocked(boundary, edgeId, locked) {
   if (!boundary.edges.some((edge) => edge.id === edgeId)) throw new Error('Deck boundary edge was not found.');
   return updateEdgeProperties(boundary, edgeId, { custom: { locked: Boolean(locked) } });
+}
+
+function rawUpdateVertex(boundary, vertexId, position) {
+  return withComputedProperties({
+    ...boundary,
+    vertices: boundary.vertices.map((vertex) => vertex.id === vertexId
+      ? { ...vertex, x: Number(position.x), y: Number(position.y) }
+      : vertex),
+  });
+}
+
+function orientationDirection(constraint, start, end) {
+  if (!constraint) return null;
+  if (constraint.type === 'horizontal') return { x: Math.sign(end.x - start.x) || Math.sign(Math.cos(constraint.angleRadians)) || 1, y: 0 };
+  if (constraint.type === 'vertical') return { x: 0, y: Math.sign(end.y - start.y) || Math.sign(Math.sin(constraint.angleRadians)) || 1 };
+  return { x: Math.cos(constraint.angleRadians), y: Math.sin(constraint.angleRadians) };
+}
+
+function projectPointToLine(point, origin, direction) {
+  const magnitudeSquared = direction.x ** 2 + direction.y ** 2;
+  const factor = ((point.x - origin.x) * direction.x + (point.y - origin.y) * direction.y) / magnitudeSquared;
+  return { x: origin.x + direction.x * factor, y: origin.y + direction.y * factor };
+}
+
+function intersectLines(firstOrigin, firstDirection, secondOrigin, secondDirection) {
+  const cross = firstDirection.x * secondDirection.y - firstDirection.y * secondDirection.x;
+  if (Math.abs(cross) < 1e-9) return null;
+  const delta = { x: secondOrigin.x - firstOrigin.x, y: secondOrigin.y - firstOrigin.y };
+  const factor = (delta.x * secondDirection.y - delta.y * secondDirection.x) / cross;
+  return { x: firstOrigin.x + firstDirection.x * factor, y: firstOrigin.y + firstDirection.y * factor };
+}
+
+export function moveVertexWithConstraints(boundary, vertexId, position) {
+  assertVertexEditable(boundary, vertexId);
+  const index = boundary.vertices.findIndex((vertex) => vertex.id === vertexId);
+  const previousIndex = (index - 1 + boundary.vertices.length) % boundary.vertices.length;
+  const nextIndex = (index + 1) % boundary.vertices.length;
+  const previous = boundary.vertices[previousIndex];
+  const current = boundary.vertices[index];
+  const next = boundary.vertices[nextIndex];
+  const incomingConstraint = getEdgeOrientationConstraint(boundary, boundary.edges[previousIndex].id);
+  const outgoingConstraint = getEdgeOrientationConstraint(boundary, boundary.edges[index].id);
+  const incomingDirection = orientationDirection(incomingConstraint, previous, current);
+  const outgoingDirection = orientationDirection(outgoingConstraint, current, next);
+  let resolved = { x: Number(position.x), y: Number(position.y) };
+
+  if (incomingDirection && outgoingDirection) {
+    const intersection = intersectLines(previous, incomingDirection, next, outgoingDirection);
+    if (intersection) resolved = intersection;
+    else resolved = projectPointToLine(resolved, previous, incomingDirection);
+  } else if (incomingDirection) {
+    resolved = projectPointToLine(resolved, previous, incomingDirection);
+  } else if (outgoingDirection) {
+    resolved = projectPointToLine(resolved, next, outgoingDirection);
+  }
+  return rawUpdateVertex(boundary, vertexId, resolved);
 }
 
 function assertVertexEditable(boundary, vertexId) {
@@ -200,7 +269,7 @@ export function chamferVertex(boundary, vertexId, setback, idFactory = defaultId
     role: incomingEdge.role === outgoingEdge.role ? incomingEdge.role : 'open',
     metadata: { generatedFromVertexId: vertexId, operation: '45-degree-chamfer' },
     properties: mergeEdgeProperties(combineEdgeProperties(incomingEdge.properties, outgoingEdge.properties), {
-      custom: { geometricConstraint: '45-degree-chamfer', chamferSetback: size, locked: false },
+      custom: { geometricConstraint: '45-degree-chamfer', chamferSetback: size, locked: false, orientationConstraint: null },
     }),
   });
   const vertices = [...boundary.vertices];
@@ -372,7 +441,11 @@ export function setEdgeLength(boundary, edgeId, length) {
   const currentLength = distance(start, end);
   const dx = (end.x - start.x) / currentLength;
   const dy = (end.y - start.y) / currentLength;
-  return updateVertex(boundary, end.id, { x: start.x + dx * length, y: start.y + dy * length });
+  assertVertexEditable(boundary, end.id);
+  const resized = rawUpdateVertex(boundary, end.id, { x: start.x + dx * length, y: start.y + dy * length });
+  const validation = validateDeckBoundary(resized);
+  if (!validation.valid) throw new Error(`Edge length change is not valid: ${validation.issues[0].message}`);
+  return resized;
 }
 
 export function offsetEdge(boundary, edgeId, offset) {
@@ -381,27 +454,81 @@ export function offsetEdge(boundary, edgeId, offset) {
   if (index < 0) throw new Error('Deck boundary edge was not found.');
   if (isEdgeLocked(boundary, edgeId)) throw new Error('Unlock this construction edge before moving it.');
   const start = boundary.vertices[index];
-  const end = boundary.vertices[(index + 1) % boundary.vertices.length];
+  const endIndex = (index + 1) % boundary.vertices.length;
+  const end = boundary.vertices[endIndex];
+  if (isVertexLocked(boundary, start.id) || isVertexLocked(boundary, end.id)) throw new Error('Unlock both edge nodes before moving this construction edge.');
+  const previousEdge = boundary.edges[(index - 1 + boundary.edges.length) % boundary.edges.length];
+  const nextEdge = boundary.edges[endIndex];
+  if (isEdgeLocked(boundary, previousEdge.id) || isEdgeLocked(boundary, nextEdge.id)) throw new Error('Unlock connected construction edges before moving this edge.');
   const length = distance(start, end);
-  const normal = { x: -(end.y - start.y) / length, y: (end.x - start.x) / length };
-  const movedStart = { x: start.x + normal.x * offset, y: start.y + normal.y * offset };
-  const movedEnd = { x: end.x + normal.x * offset, y: end.y + normal.y * offset };
-  return updateVertex(updateVertex(boundary, start.id, movedStart), end.id, movedEnd);
+  const selectedConstraint = getEdgeOrientationConstraint(boundary, edgeId);
+  const direction = orientationDirection(selectedConstraint, start, end) ?? { x: (end.x - start.x) / length, y: (end.y - start.y) / length };
+  const normal = { x: -direction.y, y: direction.x };
+  const targetOrigin = { x: start.x + normal.x * offset, y: start.y + normal.y * offset };
+  let movedStart = targetOrigin;
+  let movedEnd = { x: end.x + normal.x * offset, y: end.y + normal.y * offset };
+
+  const previousVertex = boundary.vertices[(index - 1 + boundary.vertices.length) % boundary.vertices.length];
+  const previousConstraint = getEdgeOrientationConstraint(boundary, previousEdge.id);
+  if (previousConstraint) {
+    const previousDirection = orientationDirection(previousConstraint, previousVertex, start);
+    movedStart = intersectLines(targetOrigin, direction, previousVertex, previousDirection);
+    if (!movedStart) throw new Error('The connected angle constraint prevents this edge movement.');
+  }
+
+  const followingVertex = boundary.vertices[(endIndex + 1) % boundary.vertices.length];
+  const nextConstraint = getEdgeOrientationConstraint(boundary, nextEdge.id);
+  if (nextConstraint) {
+    const nextDirection = orientationDirection(nextConstraint, end, followingVertex);
+    movedEnd = intersectLines(targetOrigin, direction, followingVertex, nextDirection);
+    if (!movedEnd) throw new Error('The connected angle constraint prevents this edge movement.');
+  }
+
+  let moved = rawUpdateVertex(boundary, start.id, movedStart);
+  moved = rawUpdateVertex(moved, end.id, movedEnd);
+  const validation = validateDeckBoundary(moved);
+  if (!validation.valid) throw new Error(`Edge movement is not valid: ${validation.issues[0].message}`);
+  return moved;
 }
 
-export function constrainEdge(boundary, edgeId, constraint) {
-  if (!['horizontal', 'vertical'].includes(constraint)) throw new Error(`Unsupported edge constraint: ${constraint}`);
+export function setEdgeOrientationConstraint(boundary, edgeId, constraint) {
+  if (!['horizontal', 'vertical', 'fixed-angle'].includes(constraint)) throw new Error(`Unsupported edge constraint: ${constraint}`);
   const index = boundary.edges.findIndex((edge) => edge.id === edgeId);
   if (index < 0) throw new Error('Deck boundary edge was not found.');
   if (isEdgeLocked(boundary, edgeId)) throw new Error('Unlock this construction edge before changing its constraint.');
   const start = boundary.vertices[index];
   const end = boundary.vertices[(index + 1) % boundary.vertices.length];
   const length = distance(start, end);
-  const direction = constraint === 'horizontal'
-    ? { x: Math.sign(end.x - start.x) || 1, y: 0 }
-    : { x: 0, y: Math.sign(end.y - start.y) || 1 };
-  const constrained = updateVertex(boundary, end.id, { x: start.x + direction.x * length, y: start.y + direction.y * length });
-  return updateEdgeProperties(constrained, edgeId, { custom: { geometricConstraint: constraint } });
+  const angleRadians = constraint === 'horizontal'
+    ? (end.x >= start.x ? 0 : Math.PI)
+    : constraint === 'vertical'
+      ? (end.y >= start.y ? Math.PI / 2 : -Math.PI / 2)
+      : Math.atan2(end.y - start.y, end.x - start.x);
+  const direction = { x: Math.cos(angleRadians), y: Math.sin(angleRadians) };
+  const aligned = constraint === 'fixed-angle'
+    ? boundary
+    : updateVertex(boundary, end.id, { x: start.x + direction.x * length, y: start.y + direction.y * length });
+  const constrained = updateEdgeProperties(aligned, edgeId, { custom: { orientationConstraint: { type: constraint, angleRadians } } });
+  const validation = validateDeckBoundary(constrained);
+  if (!validation.valid) throw new Error(`Edge constraint is not valid: ${validation.issues[0].message}`);
+  return constrained;
+}
+
+export function clearEdgeOrientationConstraint(boundary, edgeId) {
+  const edge = boundary.edges.find((entry) => entry.id === edgeId);
+  if (!edge) throw new Error('Deck boundary edge was not found.');
+  if (isEdgeLocked(boundary, edgeId)) throw new Error('Unlock this construction edge before changing its constraint.');
+  const legacy = normalizeBoundaryEdge(edge).properties.custom.geometricConstraint;
+  return updateEdgeProperties(boundary, edgeId, {
+    custom: {
+      orientationConstraint: null,
+      geometricConstraint: ['horizontal', 'vertical'].includes(legacy) ? null : legacy,
+    },
+  });
+}
+
+export function constrainEdge(boundary, edgeId, constraint) {
+  return setEdgeOrientationConstraint(boundary, edgeId, constraint);
 }
 
 export function validateDeckBoundary(boundary) {
@@ -413,6 +540,15 @@ export function validateDeckBoundary(boundary) {
     const next = boundary.vertices[(index + 1) % boundary.vertices.length];
     if (next && distance(vertex, next) < MIN_EDGE_LENGTH) {
       issues.push({ code: 'short-edge', severity: 'error', edgeId: boundary.edges[index]?.id, message: 'An edge is shorter than 6 inches.' });
+    }
+    const constraint = boundary.edges[index] ? getEdgeOrientationConstraint(boundary, boundary.edges[index].id) : null;
+    if (next && constraint) {
+      const direction = orientationDirection(constraint, vertex, next);
+      const edgeVector = { x: next.x - vertex.x, y: next.y - vertex.y };
+      const cross = Math.abs(edgeVector.x * direction.y - edgeVector.y * direction.x);
+      if (cross > Math.max(distance(vertex, next), 1) * 1e-7) {
+        issues.push({ code: 'orientation-constraint', severity: 'error', edgeId: boundary.edges[index]?.id, message: 'An edge no longer satisfies its orientation constraint.' });
+      }
     }
   });
   findSelfIntersections(boundary.vertices).forEach(([first, second]) => {

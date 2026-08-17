@@ -11,7 +11,7 @@ import { formatFeetInches, formatInches, formatSquareFeet } from '../core/units/
 import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
-import { chamferVertex, constrainEdge, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, updateVertex, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairTreads, findStairBoundaryConnection, getStairInterfaceEdge, setStairWidth, synchronizeConnectedStairLevels, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
@@ -192,7 +192,9 @@ function renderContextPanel(current) {
     const dimensionVisible = getDimensionLayer(documentModel).visible && isDimensionReferenceVisible(documentModel, edge.id);
     const breakDisabled = edgeHasRailingDependency(edge.id);
     const locked = isEdgeLocked(current, edge.id);
-    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction edge</div><h2>${locked ? '⚓ ' : ''}${formatFeetInches(length)}</h2></div>${close}</div><div class="context-actions"><button class="button ${locked ? 'active-constraint' : ''}" data-action="${locked ? 'unlock-edge' : 'lock-edge'}">${locked ? 'Unlock edge' : 'Lock edge'}</button><button class="button ${dimensionLeaderMode?.referenceId === edge.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button></div><div class="context-actions context-actions-3"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="break-edge-2" ${breakDisabled || locked ? 'disabled' : ''}>Break ×2</button><button class="button" data-action="break-edge-3" ${breakDisabled || locked ? 'disabled' : ''}>Break ×3</button></div><div class="context-actions context-actions-3"><button class="button ${edge.role === 'house' ? 'active-constraint' : ''}" data-action="quick-house-attachment">House attachment</button><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div><button class="button context-full" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button>${locked ? '<div class="context-note">This edge cannot move, change length, split, or accept geometry constraints until unlocked.</div>' : breakDisabled ? '<div class="context-note">Remove connected railing before dividing this edge.</div>' : ''}</section>`;
+    const orientation = getEdgeOrientationConstraint(current, edge.id);
+    const orientationStatus = describeOrientationConstraint(orientation);
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction edge</div><h2>${locked ? '⚓ ' : orientation?.type === 'fixed-angle' ? '⚓∠ ' : orientation?.type === 'horizontal' ? 'H · ' : orientation?.type === 'vertical' ? 'V · ' : ''}${formatFeetInches(length)}</h2></div>${close}</div><div class="context-actions"><button class="button ${locked ? 'active-constraint' : ''}" data-action="${locked ? 'unlock-edge' : 'lock-edge'}">${locked ? '✓ Edge locked' : 'Lock edge'}</button><button class="button ${dimensionLeaderMode?.referenceId === edge.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button></div><div class="context-actions context-actions-3 orientation-toggle" role="group" aria-label="Edge orientation"><button class="button ${orientation?.type === 'vertical' ? 'active-constraint' : ''}" data-action="constraint-vertical" aria-pressed="${orientation?.type === 'vertical'}" ${locked ? 'disabled' : ''}>${orientation?.type === 'vertical' ? '✓ ' : ''}Vertical</button><button class="button ${orientation?.type === 'horizontal' ? 'active-constraint' : ''}" data-action="constraint-horizontal" aria-pressed="${orientation?.type === 'horizontal'}" ${locked ? 'disabled' : ''}>${orientation?.type === 'horizontal' ? '✓ ' : ''}Horizontal</button><button class="button ${orientation?.type === 'fixed-angle' ? 'active-constraint' : ''}" data-action="constraint-lock-angle" aria-pressed="${orientation?.type === 'fixed-angle'}" ${locked ? 'disabled' : ''}>${orientation?.type === 'fixed-angle' ? '✓ ' : ''}Lock angle</button></div><div class="constraint-status ${orientation ? 'active' : ''}"><span>${orientation ? '●' : '○'}</span>${locked ? 'Full edge lock active' : orientationStatus}</div><div class="context-actions context-actions-3"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="break-edge-2" ${breakDisabled || locked ? 'disabled' : ''}>Break ×2</button><button class="button" data-action="break-edge-3" ${breakDisabled || locked ? 'disabled' : ''}>Break ×3</button></div><div class="context-actions context-actions-3"><button class="button ${edge.role === 'house' ? 'house-relationship-active' : ''}" data-action="quick-house-attachment" aria-pressed="${edge.role === 'house'}">${edge.role === 'house' ? '✓ ' : ''}House attachment</button><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div><button class="button context-full" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button>${locked ? '<div class="context-note">This edge cannot move, change length, split, or accept geometry constraints until unlocked.</div>' : breakDisabled ? '<div class="context-note">Remove connected railing before dividing this edge.</div>' : ''}</section>`;
   }
   if (selected.kind === 'stair-edge') {
     const reference = findStairInterfaceByEdgeId(selected.id);
@@ -464,7 +466,19 @@ function renderEdgeInspector(current, edge) {
   const end = current.vertices[(index + 1) % current.vertices.length];
   const length = Math.hypot(end.x - start.x, end.y - start.y);
   const properties = normalized.properties;
-  return `<section class="inspector-section edge-inspector"><div class="object-status"><div><div class="eyebrow">Construction edge</div><h2>${formatFeetInches(length)}</h2></div><span class="object-badge established">Independent</span></div><p class="section-copy">Drag the edge to move it, or refine it with exact construction dimensions.</p><div class="field-grid"><div class="field full"><label for="edge-length">Exact edge length</label><div class="compound-field"><input id="edge-length" value="${formatFeetInches(length)}"><button class="button" data-action="apply-edge-length">Apply</button></div></div><div class="field full"><label for="edge-offset">Move perpendicular</label><div class="compound-field"><input id="edge-offset" placeholder="6 in"><button class="button" data-action="apply-edge-offset">Move</button></div></div></div><div class="constraint-row"><button class="button ${properties.custom.geometricConstraint === 'horizontal' ? 'active-constraint' : ''}" data-action="constraint-horizontal">Horizontal</button><button class="button ${properties.custom.geometricConstraint === 'vertical' ? 'active-constraint' : ''}" data-action="constraint-vertical">Vertical</button></div><div class="property-list"><label><input type="checkbox" data-edge-property="fascia" ${properties.finishes.fascia ? 'checked' : ''}><span><strong>Fascia</strong><small>Exterior finish board</small></span></label><label><input type="checkbox" data-edge-property="pictureFrame" ${properties.finishes.pictureFrame ? 'checked' : ''}><span><strong>Picture frame</strong><small>Decking board along edge</small></span></label><label><input type="checkbox" data-edge-property="demolition" ${properties.existingConditions.demolition ? 'checked' : ''}><span><strong>Demolition</strong><small>Existing edge to remove</small></span></label></div><div class="field-grid"><div class="field full"><label for="edge-role">Construction relationship</label><select id="edge-role"><option value="open" ${edge.role === 'open' ? 'selected' : ''}>Unassigned</option><option value="house" ${edge.role === 'house' ? 'selected' : ''}>House attachment</option><option value="free-edge" ${edge.role === 'free-edge' ? 'selected' : ''}>Open deck edge</option></select></div><div class="field full"><label for="edge-railing">Railing intent</label><select id="edge-railing"><option value="unassigned" ${properties.safety.railing === 'unassigned' ? 'selected' : ''}>Unassigned</option><option value="required" ${properties.safety.railing === 'required' ? 'selected' : ''}>Railing required</option><option value="existing" ${properties.safety.railing === 'existing' ? 'selected' : ''}>Existing railing</option></select></div></div><div class="action-stack"><button class="button" data-action="insert-midpoint">Insert corner at midpoint</button><button class="button primary" data-action="start-stair">Attach staircase</button></div></section>`;
+  const orientation = getEdgeOrientationConstraint(current, edge.id);
+  const locked = isEdgeLocked(current, edge.id);
+  return `<section class="inspector-section edge-inspector"><div class="object-status"><div><div class="eyebrow">Construction edge</div><h2>${formatFeetInches(length)}</h2></div><span class="object-badge established">Independent</span></div><p class="section-copy">Drag the edge to move it, or refine it with exact construction dimensions.</p><div class="field-grid"><div class="field full"><label for="edge-length">Exact edge length</label><div class="compound-field"><input id="edge-length" value="${formatFeetInches(length)}"><button class="button" data-action="apply-edge-length">Apply</button></div></div><div class="field full"><label for="edge-offset">Move perpendicular</label><div class="compound-field"><input id="edge-offset" placeholder="6 in"><button class="button" data-action="apply-edge-offset">Move</button></div></div></div><div class="constraint-row constraint-row-3" role="group" aria-label="Edge orientation"><button class="button ${orientation?.type === 'horizontal' ? 'active-constraint' : ''}" data-action="constraint-horizontal" ${locked ? 'disabled' : ''}>${orientation?.type === 'horizontal' ? '✓ ' : ''}Horizontal</button><button class="button ${orientation?.type === 'vertical' ? 'active-constraint' : ''}" data-action="constraint-vertical" ${locked ? 'disabled' : ''}>${orientation?.type === 'vertical' ? '✓ ' : ''}Vertical</button><button class="button ${orientation?.type === 'fixed-angle' ? 'active-constraint' : ''}" data-action="constraint-lock-angle" ${locked ? 'disabled' : ''}>${orientation?.type === 'fixed-angle' ? '✓ ' : ''}Lock angle</button></div><div class="constraint-status ${orientation ? 'active' : ''}"><span>${orientation ? '●' : '○'}</span>${locked ? 'Full edge lock active' : describeOrientationConstraint(orientation)}</div><div class="property-list"><label><input type="checkbox" data-edge-property="fascia" ${properties.finishes.fascia ? 'checked' : ''}><span><strong>Fascia</strong><small>Exterior finish board</small></span></label><label><input type="checkbox" data-edge-property="pictureFrame" ${properties.finishes.pictureFrame ? 'checked' : ''}><span><strong>Picture frame</strong><small>Decking board along edge</small></span></label><label><input type="checkbox" data-edge-property="demolition" ${properties.existingConditions.demolition ? 'checked' : ''}><span><strong>Demolition</strong><small>Existing edge to remove</small></span></label></div><div class="field-grid"><div class="field full"><label for="edge-role">Construction relationship</label><select id="edge-role"><option value="open" ${edge.role === 'open' ? 'selected' : ''}>Unassigned</option><option value="house" ${edge.role === 'house' ? 'selected' : ''}>House attachment</option><option value="free-edge" ${edge.role === 'free-edge' ? 'selected' : ''}>Open deck edge</option></select></div><div class="field full"><label for="edge-railing">Railing intent</label><select id="edge-railing"><option value="unassigned" ${properties.safety.railing === 'unassigned' ? 'selected' : ''}>Unassigned</option><option value="required" ${properties.safety.railing === 'required' ? 'selected' : ''}>Railing required</option><option value="existing" ${properties.safety.railing === 'existing' ? 'selected' : ''}>Existing railing</option></select></div></div><div class="action-stack"><button class="button" data-action="insert-midpoint">Insert corner at midpoint</button><button class="button primary" data-action="start-stair">Attach staircase</button></div></section>`;
+}
+
+function describeOrientationConstraint(constraint) {
+  if (!constraint) return 'Angle is free';
+  if (constraint.type === 'horizontal') return 'Active constraint: Horizontal';
+  if (constraint.type === 'vertical') return 'Active constraint: Vertical';
+  let degrees = constraint.angleRadians * 180 / Math.PI;
+  degrees = ((degrees % 180) + 180) % 180;
+  if (Math.abs(degrees - 180) < .05) degrees = 0;
+  return `Active constraint: Angle locked · ${degrees.toFixed(1)}°`;
 }
 
 function renderStairInspector(current, edge) {
@@ -593,7 +607,8 @@ function renderBoundarySvg(svg, current, validation) {
     svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `boundary-edge-visible ${edge.role} ${selectedClass}` }));
     const hit = svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'boundary-edge', 'data-edge-id': edge.id, 'data-boundary-id': current.id });
     svg.append(hit);
-    if (getDimensionLayer(documentModel).visible) addDimension(svg, start, end, edge.id);
+    const temporaryChamferDimension = chamferDraft?.boundary?.id === current.id && chamferDraft.chamferEdgeId === edge.id;
+    if (getDimensionLayer(documentModel).visible && !temporaryChamferDimension) addDimension(svg, start, end, edge.id);
   });
   const markerSize = Math.max(2.8, viewport.width / 150);
   const hitSize = viewport.width / Math.max(svg.clientWidth || 1000, 1) * 34;
@@ -725,7 +740,9 @@ function addDimension(svg, start, end, referenceId) {
   const offsetY = (dx / length) * 8;
   const dimensionBoundary = boundaryForReference(referenceId);
   const locked = dimensionBoundary?.edges.some((edge) => edge.id === referenceId) && isEdgeLocked(dimensionBoundary, referenceId);
-  const label = `${locked ? '⚓ ' : ''}${formatFeetInches(length)}`;
+  const orientation = dimensionBoundary ? getEdgeOrientationConstraint(dimensionBoundary, referenceId) : null;
+  const constraintMark = locked ? '⚓ ' : orientation?.type === 'fixed-angle' ? '⚓∠ ' : orientation?.type === 'horizontal' ? 'H · ' : orientation?.type === 'vertical' ? 'V · ' : '';
+  const label = `${constraintMark}${formatFeetInches(length)}`;
   const width = Math.max(25, label.length * 3.3);
   const annotationOffset = getDimensionOffset(documentModel, referenceId);
   const leaderOffset = getDimensionLeaderOffset(documentModel, referenceId);
@@ -748,14 +765,46 @@ function renderChamferDimension(svg, draft) {
   const byId = new Map(draft.boundary.vertices.map((vertex) => [vertex.id, vertex]));
   const start = byId.get(edge.startVertexId);
   const end = byId.get(edge.endVertexId);
-  if (!start || !end) return;
+  const corner = draft.originalCorner;
+  if (!start || !end || !corner) return;
   const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
-  const label = `45° · ${formatInches(draft.setback)}`;
-  const width = Math.max(38, label.length * 4);
-  svg.append(svgElement('rect', { x: midpoint.x - width / 2, y: midpoint.y - 16, width, height: 12, rx: 3, class: 'chamfer-dimension-bg' }));
-  const text = svgElement('text', { x: midpoint.x, y: midpoint.y - 8, class: 'chamfer-dimension-text' });
-  text.textContent = label;
-  svg.append(text);
+  const worldPerPixel = viewport.width / Math.max(svg.clientWidth || 1000, 1);
+  const markerSize = Math.max(3.5, worldPerPixel * 9);
+  const triangleCenter = { x: (corner.x + start.x + end.x) / 3, y: (corner.y + start.y + end.y) / 3 };
+  const guideLabelOffset = Math.max(5, worldPerPixel * 13);
+
+  [start, end].forEach((endpoint) => {
+    svg.append(svgElement('line', { x1: corner.x, y1: corner.y, x2: endpoint.x, y2: endpoint.y, class: 'chamfer-construction-guide' }));
+    const guideMidpoint = { x: (corner.x + endpoint.x) / 2, y: (corner.y + endpoint.y) / 2 };
+    const away = { x: guideMidpoint.x - triangleCenter.x, y: guideMidpoint.y - triangleCenter.y };
+    const magnitude = Math.hypot(away.x, away.y) || 1;
+    const labelPoint = { x: guideMidpoint.x + away.x / magnitude * guideLabelOffset, y: guideMidpoint.y + away.y / magnitude * guideLabelOffset };
+    const label = formatInches(draft.setback);
+    const width = Math.max(24, label.length * 3.5);
+    svg.append(svgElement('rect', { x: labelPoint.x - width / 2, y: labelPoint.y - 5, width, height: 10, rx: 2.5, class: 'chamfer-setback-bg' }));
+    const text = svgElement('text', { x: labelPoint.x, y: labelPoint.y + .5, class: 'chamfer-setback-text' });
+    text.textContent = label;
+    svg.append(text);
+  });
+
+  svg.append(svgElement('rect', { x: corner.x - markerSize / 2, y: corner.y - markerSize / 2, width: markerSize, height: markerSize, rx: markerSize * .12, class: 'chamfer-original-node', transform: `rotate(45 ${corner.x} ${corner.y})` }));
+
+  const anglePoint = { x: corner.x + (midpoint.x - corner.x) * .34, y: corner.y + (midpoint.y - corner.y) * .34 };
+  const angle = svgElement('text', { x: anglePoint.x, y: anglePoint.y + 1, class: 'chamfer-angle-text' });
+  angle.textContent = '45°';
+  svg.append(angle);
+
+  const dx = end.x - start.x;
+  const dy = end.y - start.y;
+  const diagonalLength = Math.hypot(dx, dy);
+  const diagonalOffset = Math.max(8, worldPerPixel * 15);
+  const labelPoint = { x: midpoint.x - dy / diagonalLength * diagonalOffset, y: midpoint.y + dx / diagonalLength * diagonalOffset };
+  const diagonalLabel = formatFeetInches(diagonalLength);
+  const diagonalWidth = Math.max(27, diagonalLabel.length * 3.4);
+  svg.append(svgElement('rect', { x: labelPoint.x - diagonalWidth / 2, y: labelPoint.y - 5, width: diagonalWidth, height: 10, rx: 2.5, class: 'chamfer-diagonal-bg' }));
+  const diagonalText = svgElement('text', { x: labelPoint.x, y: labelPoint.y + .5, class: 'chamfer-diagonal-text' });
+  diagonalText.textContent = diagonalLabel;
+  svg.append(diagonalText);
 }
 
 function renderDimensionLeader(svg, labelPoint, tip, referenceId) {
@@ -1065,7 +1114,7 @@ function updateChamferDraft(raw) {
   const setback = Math.max(6, Math.min(maximum, Math.round(requested * 2) / 2));
   if (maximum < 6) { message = 'Connected edges are too short for a chamfer'; updateStatusMessage(); return; }
   try {
-    chamferDraft = chamferVertex(source, corner.id, setback);
+    chamferDraft = { ...chamferVertex(source, corner.id, setback), originalCorner: { x: corner.x, y: corner.y } };
     message = `45° chamfer · ${formatInches(setback)} setback · release to apply`;
     drawCanvasRefresh();
     updateStatusMessage();
@@ -1216,10 +1265,15 @@ function canvasPointerMove(svg, event) {
     const normal = { x: -(end.y - start.y) / length, y: (end.x - start.x) / length };
     const offset = (raw.x - edgeDragStart.point.x) * normal.x + (raw.y - edgeDragStart.point.y) * normal.y;
     if (Math.abs(offset) > viewport.width / svg.clientWidth * 3) edgeDragStart.moved = true;
-    const moved = offsetEdge(original, draggingEdgeId, offset);
-    documentModel = upsertObject(edgeDragStart.document, moved);
-    persist();
-    drawCanvasRefresh();
+    try {
+      const moved = offsetEdge(original, draggingEdgeId, offset);
+      documentModel = upsertObject(edgeDragStart.document, moved);
+      persist();
+      drawCanvasRefresh();
+    } catch (error) {
+      message = error.message;
+      updateStatusMessage();
+    }
     return;
   }
   if (draggingVertexId && boundary()) {
@@ -1228,10 +1282,12 @@ function canvasPointerMove(svg, event) {
     const anchor = current.vertices[(index - 1 + current.vertices.length) % current.vertices.length];
     const adjacentIds = new Set([draggingVertexId, current.edges[index]?.id, current.edges[(index - 1 + current.edges.length) % current.edges.length]?.id]);
     const snapped = snapForPointer(raw, anchor, [], adjacentIds);
+    const constrainedBoundary = moveVertexWithConstraints(current, draggingVertexId, snapped.point);
+    const constrainedPoint = constrainedBoundary.vertices[index];
     const tolerance = viewport.width / Math.max(svg.clientWidth, 1) * 14;
-    mergeCandidateId = findAdjacentMergeCandidate(current, draggingVertexId, snapped.point, tolerance)?.id ?? null;
+    mergeCandidateId = findAdjacentMergeCandidate(current, draggingVertexId, constrainedPoint, tolerance)?.id ?? null;
     if (mergeCandidateId) message = 'Release to merge neighboring corners';
-    documentModel = upsertObject(documentModel, updateVertex(current, draggingVertexId, snapped.point));
+    documentModel = upsertObject(documentModel, constrainedBoundary);
     persist();
     drawCanvasRefresh();
     return;
@@ -1680,6 +1736,26 @@ function completeDraft() {
   render();
 }
 
+function toggleSelectedEdgeOrientation(type) {
+  if (selected.kind !== 'edge') return;
+  const current = boundary();
+  const active = getEdgeOrientationConstraint(current, selected.id);
+  try {
+    if (active?.type === type) {
+      message = 'Angle constraint removed · edge is free';
+      commitBoundary(markBoundaryEdited(clearEdgeOrientationConstraint(current, selected.id)), 'Remove edge orientation constraint');
+      return;
+    }
+    const next = setEdgeOrientationConstraint(current, selected.id, type);
+    const applied = getEdgeOrientationConstraint(next, selected.id);
+    message = describeOrientationConstraint(applied);
+    commitBoundary(markBoundaryEdited(next), type === 'fixed-angle' ? 'Lock edge angle' : `Constrain edge ${type}`);
+  } catch (error) {
+    message = error.message;
+    render();
+  }
+}
+
 function handleAction(action) {
   if (action === 'clear-selection') { selected = { kind: null, id: null }; dimensionLeaderMode = null; dimensionLeaderGesture = null; chamferMode = null; chamferGesture = null; chamferDraft = null; moveBoundaryMode = null; moveBoundaryGesture = null; message = 'Ready'; render(); }
   if (action === 'add-deck-boundary') {
@@ -1806,8 +1882,9 @@ function handleAction(action) {
       } catch (error) { message = error.message; render(); }
     }
   }
-  if (action === 'constraint-horizontal' && selected.kind === 'edge') { try { message = 'Horizontal relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'horizontal')), 'Constrain edge horizontal'); } catch (error) { message = error.message; render(); } }
-  if (action === 'constraint-vertical' && selected.kind === 'edge') { try { message = 'Vertical relation applied'; commitBoundary(markBoundaryEdited(constrainEdge(boundary(), selected.id, 'vertical')), 'Constrain edge vertical'); } catch (error) { message = error.message; render(); } }
+  if (action === 'constraint-horizontal') toggleSelectedEdgeOrientation('horizontal');
+  if (action === 'constraint-vertical') toggleSelectedEdgeOrientation('vertical');
+  if (action === 'constraint-lock-angle') toggleSelectedEdgeOrientation('fixed-angle');
   if (action === 'insert-midpoint' && selected.kind === 'edge') {
     const current = boundary();
     const edgeIndex = current.edges.findIndex((edge) => edge.id === selected.id);

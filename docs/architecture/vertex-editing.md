@@ -12,7 +12,7 @@ Deck Boundary editing changes a construction object, not temporary sketch linewo
 - Double-click an edge to insert a corner at a precise location on desktop.
 - Remove a selected corner when at least three valid corners remain.
 - Lock a corner in place when it must remain a stable construction reference.
-- Select a 90-degree corner, choose **45° Chamfer**, and drag to set equal setbacks with a live dimension.
+- Select a 90-degree corner, choose **45° Chamfer**, and drag to set equal setbacks with temporary construction guides and separate live setback and diagonal dimensions.
 
 Only adjacent corners can merge. The candidate glows before release, making the topology change explicit. A merge is rejected if it would invalidate the boundary or if the removed corner currently anchors an attached Stair.
 
@@ -24,7 +24,7 @@ The drawing exposes constraint state with an anchor inside the edge dimension an
 
 ## 45-degree chamfer
 
-A chamfer replaces one orthogonal corner with two new nodes and one generated construction edge. The gesture derives a single setback distance from the pointer, applies it equally to both connected edges, and previews both the topology and dimension before commit. Adjacent edge identities and construction properties remain intact; the generated edge combines compatible construction properties and records its source node and geometric constraint in serializable metadata.
+A chamfer replaces one orthogonal corner with two new nodes and one generated construction edge. The gesture derives a single setback distance from the pointer and applies it equally to both connected edges. While dragging, the original corner remains as a temporary virtual node, dashed construction legs show both setbacks, and an independent label reports the diagonal edge length. These references disappear at commit, leaving the generated edge to use the normal boundary dimension and editing workflow. Adjacent edge identities and construction properties remain intact; the generated edge combines compatible construction properties and records its source node and geometric constraint in serializable metadata.
 
 ## Identity and property preservation
 

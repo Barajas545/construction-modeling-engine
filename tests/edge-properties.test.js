@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { constrainEdge, createDeckBoundary, isEdgeLocked, offsetEdge, setEdgeLength, setEdgeLocked, splitEdgeIntoSegments, updateEdgeProperties } from '../src/tools/deck-boundary/deck-boundary.js';
+import { clearEdgeOrientationConstraint, constrainEdge, createDeckBoundary, getEdgeOrientationConstraint, isEdgeLocked, moveVertexWithConstraints, offsetEdge, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
 
 let counter = 0;
 const idFactory = (prefix) => `${prefix}-${++counter}`;
@@ -38,7 +38,52 @@ test('edge editing supports exact length, offset, and geometric relations', () =
   assert.equal(moved.edges[0].id, edgeId);
   const horizontal = constrainEdge(boundary, edgeId, 'horizontal');
   assert.equal(horizontal.vertices[0].y, horizontal.vertices[1].y);
-  assert.equal(horizontal.edges[0].properties.custom.geometricConstraint, 'horizontal');
+  assert.equal(getEdgeOrientationConstraint(horizontal, edgeId).type, 'horizontal');
+});
+
+test('orientation constraints are structured, serializable, mutually replaceable, and removable', () => {
+  const boundary = makeBoundary();
+  const edgeId = boundary.edges[0].id;
+  const horizontal = setEdgeOrientationConstraint(boundary, edgeId, 'horizontal');
+  assert.equal(getEdgeOrientationConstraint(horizontal, edgeId).type, 'horizontal');
+  const angled = setEdgeOrientationConstraint(horizontal, edgeId, 'fixed-angle');
+  assert.equal(getEdgeOrientationConstraint(angled, edgeId).type, 'fixed-angle');
+  assert.doesNotThrow(() => JSON.stringify(angled));
+  assert.equal(getEdgeOrientationConstraint(clearEdgeOrientationConstraint(angled, edgeId), edgeId), null);
+});
+
+test('a fixed-angle edge can change length and move parallel without rotating', () => {
+  const boundary = makeBoundary();
+  const edgeId = boundary.edges[0].id;
+  const constrained = setEdgeOrientationConstraint(boundary, edgeId, 'fixed-angle');
+  const angle = getEdgeOrientationConstraint(constrained, edgeId).angleRadians;
+  const resized = setEdgeLength(constrained, edgeId, 144);
+  assert.ok(Math.abs(Math.atan2(resized.vertices[1].y - resized.vertices[0].y, resized.vertices[1].x - resized.vertices[0].x) - angle) < 1e-9);
+  const moved = offsetEdge(resized, edgeId, 10);
+  assert.ok(Math.abs(Math.atan2(moved.vertices[1].y - moved.vertices[0].y, moved.vertices[1].x - moved.vertices[0].x) - angle) < 1e-9);
+  assert.equal(validateDeckBoundary(moved).valid, true);
+});
+
+test('moving a connected node changes constrained edge length but preserves its angle', () => {
+  const boundary = makeBoundary();
+  const edgeId = boundary.edges[0].id;
+  const constrained = setEdgeOrientationConstraint(boundary, edgeId, 'fixed-angle');
+  const originalLength = Math.hypot(constrained.vertices[1].x - constrained.vertices[0].x, constrained.vertices[1].y - constrained.vertices[0].y);
+  const moved = moveVertexWithConstraints(constrained, constrained.vertices[1].id, { x: 80, y: 45 });
+  const nextLength = Math.hypot(moved.vertices[1].x - moved.vertices[0].x, moved.vertices[1].y - moved.vertices[0].y);
+  const expectedAngle = getEdgeOrientationConstraint(constrained, edgeId).angleRadians;
+  const actualAngle = Math.atan2(moved.vertices[1].y - moved.vertices[0].y, moved.vertices[1].x - moved.vertices[0].x);
+  assert.notEqual(nextLength, originalLength);
+  assert.ok(Math.abs(actualAngle - expectedAngle) < 1e-9);
+});
+
+test('moving an adjacent edge can resize a constrained edge indirectly', () => {
+  const boundary = setEdgeOrientationConstraint(makeBoundary(), 'edge-5', 'horizontal');
+  const originalLength = Math.abs(boundary.vertices[1].x - boundary.vertices[0].x);
+  const moved = offsetEdge(boundary, 'edge-6', 14);
+  assert.equal(moved.vertices[0].y, moved.vertices[1].y);
+  assert.notEqual(Math.abs(moved.vertices[1].x - moved.vertices[0].x), originalLength);
+  assert.equal(validateDeckBoundary(moved).valid, true);
 });
 
 test('locked construction edges reject movement, length, splitting, and constraints', () => {
