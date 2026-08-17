@@ -210,6 +210,24 @@ test('dragging one stair side changes width without breaking side parallelism an
   assert.ok(Math.abs((outerStart.y - topStart.y) - (outerEnd.y - topEnd.y)) < 1e-8);
 });
 
+test('a stair side snaps to a nearby boundary edge and exposes shared and remaining intervals', () => {
+  const makeId = ids();
+  const host = createDeckBoundary([{ x: 30, y: 0 }, { x: 150, y: 0 }, { x: 150, y: 144 }, { x: 30, y: 144 }], { idFactory: makeId });
+  const adjacent = createDeckBoundary([{ x: -20, y: -15 }, { x: 36, y: -15 }, { x: 36, y: 15 }, { x: -20, y: 15 }], { idFactory: makeId });
+  const attached = attachStairToBoundary(host, host.edges[0].id, { width: 36, startOffset: 10, totalRise: 24, treadDepth: 10 }, makeId);
+  const resized = setStairSidePosition(attached.boundary, attached.stair, 'start', { x: 39, y: -12 }, makeId, [attached.boundary, adjacent]);
+  assert.equal(resized.snap.type, 'edge');
+  assert.equal(resized.snap.boundaryId, adjacent.id);
+  assert.equal(resized.stair.sideAttachments.start.edgeId, adjacent.edges[1].id);
+  const byId = new Map(resized.boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  assert.equal(byId.get(resized.stair.anchors.openingStartVertexId).x, 36);
+  assert.equal(byId.get(resized.stair.anchors.outerStartVertexId).x, 36);
+  const segments = deriveStairSideSegments(resized.boundary, resized.stair, 'start', [resized.boundary, adjacent]);
+  assert.deepEqual(segments.map((segment) => segment.role), ['shared-boundary', 'stair-only']);
+  assert.equal(segments[0].boundaryEdgeId, adjacent.edges[1].id);
+  assert.equal(segments[0].boundaryId, adjacent.id);
+});
+
 test('deleting a stair restores a valid Deck Boundary', () => {
   const makeId = ids();
   const boundary = createDeckBoundary([{ x: 0, y: 0 }, { x: 192, y: 0 }, { x: 192, y: 144 }, { x: 0, y: 144 }], { idFactory: makeId });

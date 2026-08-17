@@ -633,9 +633,9 @@ function renderStairSide(svg, current, stair, side, start, end) {
   const selectedClass = selected.kind === 'stair-side' && selected.id === referenceId ? 'selected' : '';
   const invalidClass = stair.lifecycle?.needsReview ? 'invalid' : '';
   svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `stair-side-visible ${selectedClass} ${invalidClass}` }));
-  deriveStairSideSegments(current, stair, side).forEach((segment) => {
+  deriveStairSideSegments(current, stair, side, boundaries()).forEach((segment) => {
     const attributes = segment.role === 'shared-boundary'
-      ? { 'data-edge-id': segment.boundaryEdgeId, 'data-boundary-id': stair.host.boundaryId }
+      ? { 'data-edge-id': segment.boundaryEdgeId, 'data-boundary-id': segment.boundaryId }
       : { 'data-stair-side-id': referenceId, 'data-boundary-id': stair.host.boundaryId };
     svg.append(svgElement('line', { x1: segment.start.x, y1: segment.start.y, x2: segment.end.x, y2: segment.end.y, class: `stair-side-hit ${segment.role}`, ...attributes }));
   });
@@ -1423,13 +1423,14 @@ function canvasPointerMove(svg, event) {
     const sourceStair = gesture.document.objects.find((object) => object.type === 'stair' && object.id === gesture.stairId);
     if (!sourceBoundary || !sourceStair) return;
     try {
-      const resized = setStairSidePosition(sourceBoundary, sourceStair, gesture.side, raw);
+      const snapBoundaries = gesture.document.objects.filter((object) => object.type === 'deck-boundary');
+      const resized = setStairSidePosition(sourceBoundary, sourceStair, gesture.side, raw, snapBoundaries);
       let next = upsertObject(gesture.document, markBoundaryEdited(resized.boundary));
       next = upsertObject(next, resized.stair);
       documentModel = next;
       gesture.moved = true;
-      const snapLabel = gesture.side === 'start' ? resized.stair.dimensions.snappedStart : resized.stair.dimensions.snappedEnd;
-      message = `${formatFeetInches(resized.stair.dimensions.width)} stair width${snapLabel ? ' · side snapped to node' : ''}`;
+      const snapLabel = resized.snap?.type === 'edge' ? ' · side snapped to boundary edge' : resized.snap?.type === 'node' ? ' · side snapped to node' : '';
+      message = `${formatFeetInches(resized.stair.dimensions.width)} stair width${snapLabel}`;
       persist();
       drawCanvasRefresh();
       refreshContextPanel();

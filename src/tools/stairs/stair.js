@@ -452,7 +452,45 @@ function rebuildBoundaryEdges(boundary, stair, vertices, idFactory = defaultId) 
   });
 }
 
-export function setStairSidePosition(boundary, stair, side, point, idFactory = defaultId) {
+function findStairSideBoundarySnap(boundary, stair, offset, hostStart, hostUnit, movingTop, movingOuter, candidateBoundaries) {
+  const sideVector = { x: movingOuter.x - movingTop.x, y: movingOuter.y - movingTop.y };
+  const sideLength = Math.hypot(sideVector.x, sideVector.y);
+  if (sideLength < 1e-8) return null;
+  const sideUnit = { x: sideVector.x / sideLength, y: sideVector.y / sideLength };
+  const candidates = [];
+  const uniqueBoundaries = [...new Map(candidateBoundaries.map((entry) => [entry.id, entry])).values()];
+  for (const candidateBoundary of uniqueBoundaries) {
+    const candidateById = new Map(candidateBoundary.vertices.map((vertex) => [vertex.id, vertex]));
+    for (const edge of candidateBoundary.edges) {
+      if (edge.properties?.attachments?.stairId === stair.id) continue;
+      const a = candidateById.get(edge.startVertexId);
+      const b = candidateById.get(edge.endVertexId);
+      if (!a || !b) continue;
+      const edgeVector = { x: b.x - a.x, y: b.y - a.y };
+      const edgeLength = Math.hypot(edgeVector.x, edgeVector.y);
+      if (edgeLength < 1e-8) continue;
+      const parallelError = Math.abs(sideUnit.x * edgeVector.y - sideUnit.y * edgeVector.x) / edgeLength;
+      if (parallelError > 1e-6) continue;
+      const offsetA = (a.x - hostStart.x) * hostUnit.x + (a.y - hostStart.y) * hostUnit.y;
+      const offsetB = (b.x - hostStart.x) * hostUnit.x + (b.y - hostStart.y) * hostUnit.y;
+      if (Math.abs(offsetA - offsetB) > 1e-5) continue;
+      const targetOffset = (offsetA + offsetB) / 2;
+      const snapDistance = Math.abs(offset - targetOffset);
+      if (snapDistance > STAIR_SIDE_SNAP_TOLERANCE) continue;
+      const desiredTop = { x: hostStart.x + hostUnit.x * targetOffset, y: hostStart.y + hostUnit.y * targetOffset };
+      const ta = (a.x - desiredTop.x) * sideUnit.x + (a.y - desiredTop.y) * sideUnit.y;
+      const tb = (b.x - desiredTop.x) * sideUnit.x + (b.y - desiredTop.y) * sideUnit.y;
+      const overlap = Math.min(sideLength, Math.max(ta, tb)) - Math.max(0, Math.min(ta, tb));
+      if (overlap <= 1e-6) continue;
+      candidates.push({ type: 'edge', boundaryId: candidateBoundary.id, edgeId: edge.id, offset: targetOffset, distance: snapDistance, overlap });
+    }
+  }
+  return candidates.sort((a, b) => a.distance - b.distance || b.overlap - a.overlap)[0] ?? null;
+}
+
+export function setStairSidePosition(boundary, stair, side, point, idFactoryOrBoundaries = defaultId, candidateBoundaries = [boundary]) {
+  const idFactory = Array.isArray(idFactoryOrBoundaries) ? defaultId : idFactoryOrBoundaries;
+  const snapBoundaries = Array.isArray(idFactoryOrBoundaries) ? idFactoryOrBoundaries : candidateBoundaries;
   if (!['start', 'end'].includes(side)) throw new Error('Select a valid stair side.');
   if ((side === 'start' && stair.dimensions.snappedStart) || (side === 'end' && stair.dimensions.snappedEnd)) throw new Error('This stair side is snapped to the base node. Recreate the stair to detach it.');
   const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
@@ -474,14 +512,19 @@ export function setStairSidePosition(boundary, stair, side, point, idFactory = d
     ? (topEnd.x - hostStart.x) * unit.x + (topEnd.y - hostStart.y) * unit.y
     : (topStart.x - hostStart.x) * unit.x + (topStart.y - hostStart.y) * unit.y;
   offset = side === 'start' ? Math.max(0, Math.min(fixedOffset - 24, offset)) : Math.max(fixedOffset + 24, Math.min(hostLength, offset));
-  const snapTarget = side === 'start' ? 0 : hostLength;
-  const shouldSnap = Math.abs(offset - snapTarget) <= STAIR_SIDE_SNAP_TOLERANCE;
-  offset = shouldSnap ? snapTarget : offset;
-  const desired = { x: hostStart.x + unit.x * offset, y: hostStart.y + unit.y * offset };
   const movingTop = side === 'start' ? topStart : topEnd;
   const movingOuter = side === 'start' ? outerStart : outerEnd;
+  const snapTarget = side === 'start' ? 0 : hostLength;
+  const shouldSnap = Math.abs(offset - snapTarget) <= STAIR_SIDE_SNAP_TOLERANCE;
+  const boundarySnap = shouldSnap ? null : findStairSideBoundarySnap(boundary, stair, offset, hostStart, unit, movingTop, movingOuter, snapBoundaries);
+  offset = shouldSnap ? snapTarget : boundarySnap?.offset ?? offset;
+  const desired = { x: hostStart.x + unit.x * offset, y: hostStart.y + unit.y * offset };
   const delta = { x: desired.x - movingTop.x, y: desired.y - movingTop.y };
   let nextStair = { ...stair, anchors: { ...stair.anchors }, interfaceEdge: { ...getStairInterfaceEdge(stair) } };
+  nextStair.sideAttachments = {
+    ...stair.sideAttachments,
+    [side]: boundarySnap ? { boundaryId: boundarySnap.boundaryId, edgeId: boundarySnap.edgeId, relationship: 'shared-boundary' } : null,
+  };
   let vertices = boundary.vertices.map((vertex) => [movingTop.id, movingOuter.id].includes(vertex.id) ? { ...vertex, x: vertex.x + delta.x, y: vertex.y + delta.y } : vertex);
   if (shouldSnap) {
     const target = side === 'start' ? hostStart : hostEnd;
@@ -502,7 +545,11 @@ export function setStairSidePosition(boundary, stair, side, point, idFactory = d
   const resizedBoundary = withComputedProperties({ ...boundary, vertices: ordered, edges: rebuildBoundaryEdges(boundary, nextStair, ordered, idFactory) });
   const validation = validateDeckBoundary(resizedBoundary);
   if (!validation.valid) throw new Error(`Stair width cannot change: ${validation.issues[0].message}`);
-  return { boundary: resizedBoundary, stair: { ...nextStair, lifecycle: { ...nextStair.lifecycle, revision: (nextStair.lifecycle?.revision ?? 1) + 1 } } };
+  return {
+    boundary: resizedBoundary,
+    stair: { ...nextStair, lifecycle: { ...nextStair.lifecycle, revision: (nextStair.lifecycle?.revision ?? 1) + 1 } },
+    snap: shouldSnap ? { type: 'node', vertexId: (side === 'start' ? hostStart : hostEnd).id } : boundarySnap,
+  };
 }
 
 export function detachStairFromBoundary(boundary, stair, idFactory = defaultId) {
@@ -593,7 +640,7 @@ export function deriveStairTreads(boundary, stair) {
   });
 }
 
-export function deriveStairSideSegments(boundary, stair, side) {
+export function deriveStairSideSegments(boundary, stair, side, candidateBoundaries = [boundary]) {
   const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
   const start = byId.get(side === 'start' ? stair.anchors.openingStartVertexId : stair.anchors.openingEndVertexId);
   const end = byId.get(side === 'start' ? stair.anchors.outerStartVertexId : stair.anchors.outerEndVertexId);
@@ -603,19 +650,23 @@ export function deriveStairSideSegments(boundary, stair, side) {
   const lengthSquared = dx * dx + dy * dy;
   if (lengthSquared < 1e-8) return [];
   const overlaps = [];
-  for (const edge of boundary.edges) {
-    if (edge.properties?.attachments?.stairId === stair.id) continue;
-    const a = byId.get(edge.startVertexId);
-    const b = byId.get(edge.endVertexId);
-    if (!a || !b) continue;
-    const crossDirection = Math.abs(dx * (b.y - a.y) - dy * (b.x - a.x));
-    const crossOffset = Math.abs(dx * (a.y - start.y) - dy * (a.x - start.x));
-    if (crossDirection > 1e-6 * Math.sqrt(lengthSquared) * Math.max(1, distance(a, b)) || crossOffset > 1e-6 * lengthSquared) continue;
-    const ta = ((a.x - start.x) * dx + (a.y - start.y) * dy) / lengthSquared;
-    const tb = ((b.x - start.x) * dx + (b.y - start.y) * dy) / lengthSquared;
-    const from = Math.max(0, Math.min(ta, tb));
-    const to = Math.min(1, Math.max(ta, tb));
-    if (to - from > 1e-8) overlaps.push({ from, to, edgeId: edge.id });
+  const uniqueBoundaries = [...new Map(candidateBoundaries.map((entry) => [entry.id, entry])).values()];
+  for (const candidateBoundary of uniqueBoundaries) {
+    const candidateById = candidateBoundary.id === boundary.id ? byId : new Map(candidateBoundary.vertices.map((vertex) => [vertex.id, vertex]));
+    for (const edge of candidateBoundary.edges) {
+      if (edge.properties?.attachments?.stairId === stair.id) continue;
+      const a = candidateById.get(edge.startVertexId);
+      const b = candidateById.get(edge.endVertexId);
+      if (!a || !b) continue;
+      const crossDirection = Math.abs(dx * (b.y - a.y) - dy * (b.x - a.x));
+      const crossOffset = Math.abs(dx * (a.y - start.y) - dy * (a.x - start.x));
+      if (crossDirection > 1e-6 * Math.sqrt(lengthSquared) * Math.max(1, distance(a, b)) || crossOffset > 1e-6 * lengthSquared) continue;
+      const ta = ((a.x - start.x) * dx + (a.y - start.y) * dy) / lengthSquared;
+      const tb = ((b.x - start.x) * dx + (b.y - start.y) * dy) / lengthSquared;
+      const from = Math.max(0, Math.min(ta, tb));
+      const to = Math.min(1, Math.max(ta, tb));
+      if (to - from > 1e-8) overlaps.push({ from, to, edgeId: edge.id, boundaryId: candidateBoundary.id });
+    }
   }
   const breaks = [...new Set([0, 1, ...overlaps.flatMap((overlap) => [overlap.from, overlap.to])])].sort((a, b) => a - b);
   return breaks.slice(0, -1).map((from, index) => {
@@ -625,6 +676,7 @@ export function deriveStairSideSegments(boundary, stair, side) {
     return {
       role: shared ? 'shared-boundary' : 'stair-only',
       boundaryEdgeId: shared?.edgeId ?? null,
+      boundaryId: shared?.boundaryId ?? boundary.id,
       start: { x: start.x + dx * from, y: start.y + dy * from },
       end: { x: start.x + dx * to, y: start.y + dy * to },
       length: Math.sqrt(lengthSquared) * (to - from),
