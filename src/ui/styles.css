@@ -84,13 +84,21 @@ button { color: inherit; }
 .railing-snap-marker.edge, .railing-snap-marker.vertex { stroke: #fff; }
 .railing-snap-marker.end { fill: rgb(216 255 98 / 32%); }
 .stair-construction-fill { fill: rgb(63 78 84 / 65%); stroke: #91a4a7; stroke-width: 1.5; vector-effect: non-scaling-stroke; pointer-events: none; }
+.stair-construction-fill.selected { stroke: #fff; stroke-width: 2.5; }
+.stair-construction-fill.invalid { fill: rgb(255 79 87 / 20%); stroke: var(--danger); stroke-width: 2.5; filter: drop-shadow(0 0 5px rgb(255 79 87 / 35%)); }
 .stair-tread { stroke: #d1d9da; stroke-width: 1.2; vector-effect: non-scaling-stroke; pointer-events: none; }
+.stair-tread.invalid { stroke: var(--danger); }
 .stair-preview-fill { fill: rgb(216 255 98 / 8%); stroke: var(--accent); stroke-width: 1.5; stroke-dasharray: 5 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .stair-snap-node { fill: rgb(216 255 98 / 18%); stroke: var(--accent); stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; animation: arrow-pulse 850ms ease-in-out infinite; }
 .stair-preview-tread { stroke: rgb(216 255 98 / 65%); stroke-width: 1; stroke-dasharray: 3 2; vector-effect: non-scaling-stroke; pointer-events: none; }
 .stair-interface-visible { stroke: var(--cyan); stroke-width: 2.4; vector-effect: non-scaling-stroke; pointer-events: none; }
 .stair-interface-visible.selected { stroke: var(--accent); stroke-width: 3.5; }
 .stair-interface-hit { stroke: transparent; stroke-width: 14; vector-effect: non-scaling-stroke; cursor: pointer; }
+.stair-side-visible { stroke: #aebdc1; stroke-width: 2; vector-effect: non-scaling-stroke; pointer-events: none; }
+.stair-side-visible.selected { stroke: var(--accent); stroke-width: 4; filter: drop-shadow(0 0 4px rgb(216 255 98 / 50%)); }
+.stair-side-visible.invalid { stroke: var(--danger); }
+.stair-side-hit { stroke: transparent; stroke-width: 20; vector-effect: non-scaling-stroke; cursor: ew-resize; }
+.stair-side-hit.shared-boundary { cursor: pointer; }
 .vertex { fill: #0d1114; stroke: #f1f5f4; stroke-width: 1.6; vector-effect: non-scaling-stroke; pointer-events: none; }
 .vertex-hit { fill: transparent; cursor: grab; }
 .vertex.selected { fill: var(--accent); stroke: #fff; }
@@ -113,6 +121,10 @@ button { color: inherit; }
 .dimension-bg.selected { stroke: var(--accent); stroke-width: 1; }
 .dimension-bg.area { fill: #111a1f; stroke: var(--cyan); stroke-width: .7; }
 .dimension-text.area { fill: #fff; font-weight: 800; letter-spacing: .08em; }
+.dimension-bg.stair { fill: #11181d; stroke: #94a7ad; stroke-width: .7; }
+.dimension-bg.stair.invalid { fill: #261316; stroke: var(--danger); stroke-width: 1.2; }
+.dimension-text.stair { fill: #fff; font-size: 6px; font-weight: 850; letter-spacing: .05em; }
+.dimension-text.stair.invalid { fill: #ff9b91; }
 .level-down-line { stroke: #e8f4f7; stroke-width: 2.5; stroke-dasharray: 7 3; vector-effect: non-scaling-stroke; pointer-events: none; }
 .level-down-line.selected { stroke: var(--accent); stroke-width: 4; }
 .level-down-region { fill: #061014; stroke: none; pointer-events: none; }
@@ -146,6 +158,7 @@ button { color: inherit; }
 .stair-live-hud > strong { display: block; margin: 3px 0 10px; color: #fff; font-size: 27px; letter-spacing: -.04em; }
 .stair-live-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 5px 8px; padding: 9px 0; border-top: 1px solid #2a353b; border-bottom: 1px solid #2a353b; }
 .stair-live-grid span { color: var(--muted); font-size: 9px; }
+.stair-live-grid .stair-live-run { grid-column: 1 / -1; display: flex; justify-content: space-between; border-top: 1px solid #263138; margin-top: 3px; padding-top: 6px; }
 .stair-live-grid b { color: var(--text); font-size: 10px; }
 .stair-live-hud small { display: block; margin-top: 9px; color: #aebcc0; font-size: 8px; line-height: 1.4; }
 .hud-row { display: flex; justify-content: space-between; gap: 10px; padding: 3px 1px; color: var(--muted); font-size: 10px; }
@@ -173,6 +186,8 @@ button { color: inherit; }
 .context-select select { width: 100%; height: 34px; border: 1px solid #354149; border-radius: 7px; background: #0c1114; color: var(--text); padding: 0 8px; }
 .context-full { width: 100%; margin-top: 8px; }
 .context-note { margin-top: 8px; color: #829299; font-size: 9px; line-height: 1.4; }
+.stair-context.invalid-stair { border-color: var(--danger); box-shadow: 0 14px 30px rgb(255 79 87 / 12%); }
+.stair-edit-grid { margin-top: 10px; }
 .constraint-status { display: flex; align-items: center; gap: 6px; min-height: 25px; margin-top: 6px; border: 1px solid #263138; border-radius: 6px; background: #0d1215; padding: 5px 8px; color: #829299; font-size: 9px; }
 .constraint-status span { color: #64727a; font-size: 8px; }
 .constraint-status.active { border-color: rgb(216 255 98 / 24%); color: #c9d4d6; }

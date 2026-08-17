@@ -6,7 +6,8 @@ export function formatFeetInches(totalInches, precision = 1) {
   const feet = Math.floor(rounded / INCHES_PER_FOOT);
   const inches = rounded - feet * INCHES_PER_FOOT;
   const sign = totalInches < 0 ? '−' : '';
-  const inchText = Number.isInteger(inches) ? inches.toFixed(0) : inches.toFixed(1);
+  const decimals = precision < 1 ? Math.min(3, (String(precision).split('.')[1] ?? '').length) : 0;
+  const inchText = Number(inches.toFixed(decimals)).toString();
   return `${sign}${feet}′ ${inchText}″`;
 }
 

@@ -13,7 +13,7 @@ import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
-import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairTreads, findStairBoundaryConnection, getStairInterfaceEdge, setStairWidth, synchronizeConnectedStairLevels, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
+import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -45,6 +45,7 @@ let touchGesture = null;
 let pendingTouch = null;
 let stairDraft = null;
 let stairGesture = null;
+let stairSideGesture = null;
 let dimensionDragStart = null;
 let dimensionLeaderMode = null;
 let dimensionLeaderGesture = null;
@@ -162,7 +163,7 @@ function render() {
           </div>
           <svg class="model-canvas ${mode === 'draw' || mode === 'level-down' ? 'drawing' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
           <div class="cursor-hud" aria-live="polite"><div class="hud-row"><span>Length</span><strong data-hud-length>—</strong></div><div class="hud-row"><span>Angle</span><strong data-hud-angle>—</strong></div><div class="hud-row snap"><span data-hud-snap-dot></span><strong data-hud-snap>Grid</strong></div><div class="hud-input" data-hud-input>Type a length</div></div>
-          <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span></div><small>Release to build · 7.5″ max rise · 11″ max tread</small></div>
+          <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span><span class="stair-live-run"><b data-stair-live-run>—</b> total run</span></div><small data-stair-live-status>Release to build · 5″–7.5″ risers · 10″–11″ treads</small></div>
           <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
         </section>
         <aside class="inspector open">${renderContextPanel(current)}${renderProgress(progress, current)}${renderInspector(current, validation)}${renderLayerAndSnapControls()}</aside>
@@ -203,6 +204,12 @@ function renderContextPanel(current) {
     const dimensionVisible = getDimensionLayer(documentModel).visible && isDimensionReferenceVisible(documentModel, reference.edge.id);
     return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected stair interface</div><h2>Deck–Stair line</h2></div>${close}</div><div class="context-actions"><button class="button ${dimensionVisible ? '' : 'primary'}" data-action="toggle-selected-dimension">${dimensionVisible ? 'Delete dimension' : 'Add dimension'}</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button></div><div class="context-actions"><button class="button ${properties.finishes.fascia ? 'active-constraint' : ''}" data-action="quick-fascia">Fascia</button><button class="button ${properties.finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-picture-frame">Picture frame</button></div></section>`;
   }
+  if (selected.kind === 'stair-side') {
+    const reference = findStairSide(selected.id);
+    if (!reference) return '';
+    const snapped = reference.side === 'start' ? reference.stair.dimensions.snappedStart : reference.stair.dimensions.snappedEnd;
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected stair side</div><h2>${reference.side === 'start' ? 'Left' : 'Right'} side · ${formatFeetInches(reference.stair.dimensions.totalRun)}</h2></div>${close}</div><div class="constraint-status active"><span>●</span>${snapped ? 'Snapped to base node · fixed in place' : 'Drag sideways to change stair width'}</div><div class="context-actions"><button class="button" data-action="select-stair-object">Stair properties</button><button class="button danger" data-action="delete-stair">Delete stairs</button></div></section>`;
+  }
   if (selected.kind === 'vertex') {
     const locked = isVertexLocked(current, selected.id);
     const index = current.vertices.findIndex((vertex) => vertex.id === selected.id);
@@ -212,6 +219,7 @@ function renderContextPanel(current) {
   }
   if (selected.kind === 'dimension') {
     const reference = resolveDimensionReference(selected.id);
+    if (reference?.kind === 'stair') return renderStairContextPanel(reference.stair, deckingVisible, close);
     if (reference?.kind === 'area') {
       const localBoundary = reference.boundary;
       const levelDown = getBoundaryLevelDown(localBoundary);
@@ -226,8 +234,18 @@ function renderContextPanel(current) {
     if (!reference) return '';
     return renderLevelDownContext(reference.levelDown, deriveLevelDownRegion(reference.levelDown, current), deckingVisible, close, false, reference.length);
   }
-  if (selected.kind === 'stair') return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected construction object</div><h2>Stair</h2></div>${close}</div><div class="context-actions"><button class="button" data-action="select-stair-interface">Select deck interface</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button></div></section>`;
+  if (selected.kind === 'stair') {
+    const stair = documentModel.objects.find((object) => object.type === 'stair' && object.id === selected.id);
+    return stair ? renderStairContextPanel(stair, deckingVisible, close) : '';
+  }
   return '';
+}
+
+function renderStairContextPanel(stair, deckingVisible, close) {
+  const invalid = stair.lifecycle?.needsReview;
+  const riserCount = stair.dimensions.riserCount ?? stair.dimensions.stepCount;
+  const treadCount = stair.dimensions.treadCount ?? riserCount - 1;
+  return `<section class="context-object-panel stair-context ${invalid ? 'invalid-stair' : ''}"><div class="context-heading"><div><div class="eyebrow">${invalid ? 'Stair needs review' : 'Selected staircase'}</div><h2>${escapeHtml(stair.name)}</h2></div>${close}</div>${invalid ? `<div class="validation error"><span class="validation-dot"></span><span>${escapeHtml(stair.lifecycle.reviewReason ?? 'No valid stair layout remains.')}</span></div>` : ''}<div class="context-stat"><span>Total run</span><strong>${formatFeetInches(stair.dimensions.totalRun, .25)}</strong><small>${riserCount}R · ${treadCount}T</small></div><div class="field-grid stair-edit-grid"><div class="field"><label for="stair-total-rise">Total rise</label><input id="stair-total-rise" value="${formatInches(stair.dimensions.totalRise)}" ${stair.destination ? 'disabled' : ''}></div><div class="field"><label for="stair-riser-height">Riser</label><input id="stair-riser-height" value="${formatInches(stair.dimensions.riserHeight)}"></div><div class="field full"><label for="stair-tread-depth">Tread</label><div class="compound-field"><input id="stair-tread-depth" value="${formatInches(stair.dimensions.treadDepth)}"><button class="button" data-action="apply-stair-dimensions">Apply</button></div></div></div><div class="context-actions"><button class="button" data-action="select-stair-interface">Select deck interface</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide decking' : 'Show decking'}</button></div><button class="button danger context-full" data-action="delete-stair">Delete stairs</button><div class="context-note">${stair.destination ? 'Total rise follows the connected deck levels. CME recalculates first and marks the stair red only when no valid landing remains.' : 'Risers stay between 5″ and 7.5″; treads stay between 10″ and 11″.'}</div></section>`;
 }
 
 function refreshContextPanel() {
@@ -316,6 +334,17 @@ function findStairInterfaceByEdgeId(edgeId) {
   return null;
 }
 
+function stairSideId(stair, side) {
+  return `${stair.id}:side:${side}`;
+}
+
+function findStairSide(referenceId) {
+  for (const stair of documentModel.objects.filter((object) => object.type === 'stair')) {
+    for (const side of ['start', 'end']) if (stairSideId(stair, side) === referenceId) return { stair, side };
+  }
+  return null;
+}
+
 function resolveRailingHostByEdgeId(edgeId, edgeKind = null) {
   const current = boundaryForReference(edgeId) ?? boundary();
   if (!current) return null;
@@ -379,6 +408,14 @@ function areaDimensionId(current = boundary()) {
   return current ? `${current.id}:area` : null;
 }
 
+function stairDimensionId(stair) {
+  return `${stair.id}:label`;
+}
+
+function findStairByDimensionId(referenceId) {
+  return documentModel.objects.find((object) => object.type === 'stair' && stairDimensionId(object) === referenceId) ?? null;
+}
+
 function levelDownDimensionId(levelDown) {
   return `${levelDown.id}:drop`;
 }
@@ -411,6 +448,8 @@ function selectedLevelDown() {
 function resolveDimensionReference(referenceId) {
   const current = boundaryForReference(referenceId) ?? boundary();
   if (current && referenceId === areaDimensionId(current)) return { kind: 'area', boundary: current, label: `${formatSquareFeet(current.computed.areaSquareInches)} deck area` };
+  const stairLabel = findStairByDimensionId(referenceId);
+  if (stairLabel) return { kind: 'stair', stair: stairLabel, boundary: boundaryById(stairLabel.host.boundaryId), label: stairLabel.name };
   const levelDown = findLevelDownByDimensionId(referenceId);
   if (current && levelDown) return { kind: 'level-down-area', levelDown, region: deriveLevelDownRegion(levelDown, current), label: `${formatInches(getLevelDownDepth(levelDown, current))} below main deck` };
   const railingGeometry = findRailingGeometry(referenceId);
@@ -440,6 +479,11 @@ function getDimensionObjectAnchor(referenceId) {
   if (reference.kind === 'area') return getBoundaryCentroid(current);
   if (reference.kind === 'level-down-area') return reference.region?.centroid ?? null;
   if (reference.kind === 'railing') return { x: (reference.geometry.start.x + reference.geometry.end.x) / 2, y: (reference.geometry.start.y + reference.geometry.end.y) / 2 };
+  if (reference.kind === 'stair') {
+    const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+    const points = Object.values(reference.stair.anchors).map((id) => byId.get(id)).filter(Boolean);
+    return points.length ? { x: points.reduce((sum, point) => sum + point.x, 0) / points.length, y: points.reduce((sum, point) => sum + point.y, 0) / points.length } : null;
+  }
   if (reference.kind === 'stair-interface') {
     const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
     const start = byId.get(reference.edge.startVertexId);
@@ -482,7 +526,7 @@ function describeOrientationConstraint(constraint) {
 }
 
 function renderStairInspector(current, edge) {
-  return `<section class="inspector-section stair-panel"><div class="eyebrow">Live stair placement</div><h2>Press and drag outward</h2><p class="section-copy">Start on this construction edge and pull away from the deck. Treads and risers will appear immediately; release when the displayed total rise matches the field measurement.</p><div class="stair-limit-list"><span><strong>7.5″</strong> maximum riser</span><span><strong>11″</strong> maximum tread</span><span><strong>Deck</strong> is the upper landing</span></div><div class="action-stack"><button class="button" data-action="cancel-stair">Cancel stair tool</button></div></section>`;
+  return `<section class="inspector-section stair-panel"><div class="eyebrow">Live stair placement</div><h2>Press and drag outward</h2><p class="section-copy">The drag controls total rise first. CME chooses equal risers, then snaps the run to equal construction treads. A lower deck connects only when the complete landing line fits inside its surface.</p><div class="stair-limit-list"><span><strong>5″–7.5″</strong> equal risers</span><span><strong>10″–11″</strong> equal treads</span><span><strong>Deck</strong> is the upper landing</span></div><div class="action-stack"><button class="button" data-action="cancel-stair">Cancel stair tool</button></div></section>`;
 }
 
 function drawCanvas(svg, current, validation) {
@@ -523,10 +567,8 @@ function renderStairPreview(svg, current) {
   try {
     const preview = attachStairToBoundary(current, selected.id, options, (prefix) => `preview-${prefix}-${++count}`);
     renderStairShape(svg, preview.boundary, preview.stair, true);
-    if (stairDraft.destination) {
-      const target = boundaryById(stairDraft.destination.boundaryId);
-      const index = target?.edges.findIndex((edge) => edge.id === stairDraft.destination.edgeId) ?? -1;
-      if (index >= 0) svg.append(svgElement('line', { x1: target.vertices[index].x, y1: target.vertices[index].y, x2: target.vertices[(index + 1) % target.vertices.length].x, y2: target.vertices[(index + 1) % target.vertices.length].y, class: 'stair-landing-snap' }));
+    if (stairDraft.destination && stairDraft.landing) {
+      svg.append(svgElement('line', { x1: stairDraft.landing.start.x, y1: stairDraft.landing.start.y, x2: stairDraft.landing.end.x, y2: stairDraft.landing.end.y, class: 'stair-landing-snap' }));
     }
     if (stairDraft.snappedStart || stairDraft.snappedEnd) {
       const byId = new Map(preview.boundary.vertices.map((vertex) => [vertex.id, vertex]));
@@ -544,11 +586,55 @@ function renderStairShape(svg, current, stair, preview) {
   const polygonPoints = [ids.openingStartVertexId, ids.outerStartVertexId, ids.outerEndVertexId, ids.openingEndVertexId]
     .map((id) => byId.get(id)).filter(Boolean);
   if (polygonPoints.length !== 4) return;
-  svg.append(svgElement('polygon', { points: polygonPoints.map((point) => `${point.x},${point.y}`).join(' '), class: preview ? 'stair-preview-fill' : 'stair-construction-fill' }));
+  const invalidClass = stair.lifecycle?.needsReview ? 'invalid' : '';
+  const selectedClass = selected.kind === 'stair' && selected.id === stair.id ? 'selected' : '';
+  svg.append(svgElement('polygon', { points: polygonPoints.map((point) => `${point.x},${point.y}`).join(' '), class: `${preview ? 'stair-preview-fill' : 'stair-construction-fill'} ${invalidClass} ${selectedClass}` }));
   deriveStairTreads(current, stair).forEach((tread, index) => {
-    svg.append(svgElement('line', { x1: tread.start.x, y1: tread.start.y, x2: tread.end.x, y2: tread.end.y, class: preview ? 'stair-preview-tread' : 'stair-tread', 'data-step': index + 1 }));
+    svg.append(svgElement('line', { x1: tread.start.x, y1: tread.start.y, x2: tread.end.x, y2: tread.end.y, class: `${preview ? 'stair-preview-tread' : 'stair-tread'} ${invalidClass}`, 'data-step': index + 1 }));
   });
-  if (!preview) renderStairInterfaceEdge(svg, current, stair, byId);
+  if (!preview) {
+    renderStairSide(svg, current, stair, 'start', polygonPoints[0], polygonPoints[1]);
+    renderStairSide(svg, current, stair, 'end', polygonPoints[3], polygonPoints[2]);
+    renderStairInterfaceEdge(svg, current, stair, byId);
+    if (getDimensionLayer(documentModel).visible) renderStairDimension(svg, current, stair, polygonPoints);
+  }
+}
+
+function renderStairSide(svg, current, stair, side, start, end) {
+  const referenceId = stairSideId(stair, side);
+  const selectedClass = selected.kind === 'stair-side' && selected.id === referenceId ? 'selected' : '';
+  const invalidClass = stair.lifecycle?.needsReview ? 'invalid' : '';
+  svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `stair-side-visible ${selectedClass} ${invalidClass}` }));
+  deriveStairSideSegments(current, stair, side).forEach((segment) => {
+    const attributes = segment.role === 'shared-boundary'
+      ? { 'data-edge-id': segment.boundaryEdgeId, 'data-boundary-id': stair.host.boundaryId }
+      : { 'data-stair-side-id': referenceId, 'data-boundary-id': stair.host.boundaryId };
+    svg.append(svgElement('line', { x1: segment.start.x, y1: segment.start.y, x2: segment.end.x, y2: segment.end.y, class: `stair-side-hit ${segment.role}`, ...attributes }));
+  });
+}
+
+function renderStairDimension(svg, current, stair, points) {
+  const referenceId = stairDimensionId(stair);
+  if (!isDimensionReferenceVisible(documentModel, referenceId)) return;
+  const source = { x: points.reduce((sum, point) => sum + point.x, 0) / points.length, y: points.reduce((sum, point) => sum + point.y, 0) / points.length };
+  const offset = getDimensionOffset(documentModel, referenceId);
+  const leaderOffset = getDimensionLeaderOffset(documentModel, referenceId);
+  const labelPoint = { x: source.x + offset.x, y: source.y + offset.y };
+  const tip = { x: source.x + leaderOffset.x, y: source.y + leaderOffset.y };
+  if (Math.hypot(offset.x, offset.y) > 3) renderDimensionLeader(svg, labelPoint, tip, referenceId);
+  const stairs = documentModel.objects.filter((object) => object.type === 'stair');
+  const number = Math.max(1, stairs.findIndex((object) => object.id === stair.id) + 1);
+  const label = `STAIRS ${number} · ${stair.dimensions.riserCount}R · ${stair.dimensions.treadCount}T`;
+  const width = Math.max(54, label.length * 3.4);
+  const selectedClass = (selected.kind === 'dimension' && selected.id === referenceId) || (selected.kind === 'stair' && selected.id === stair.id) ? 'selected' : '';
+  const invalidClass = stair.lifecycle?.needsReview ? 'invalid' : '';
+  const group = svgElement('g', { class: 'dimension-annotation stair-dimension' });
+  group.append(svgElement('rect', { x: labelPoint.x - width / 2 - 3, y: labelPoint.y - 8, width: width + 6, height: 16, rx: 4, class: 'dimension-hit', 'data-dimension-id': referenceId, 'data-boundary-id': current.id }));
+  group.append(svgElement('rect', { x: labelPoint.x - width / 2, y: labelPoint.y - 6, width, height: 12, rx: 3, class: `dimension-bg stair ${selectedClass} ${invalidClass}`, 'data-dimension-id': referenceId, 'data-boundary-id': current.id }));
+  const text = svgElement('text', { x: labelPoint.x, y: labelPoint.y + 1, class: `dimension-text stair ${invalidClass}` });
+  text.textContent = label;
+  group.append(text);
+  svg.append(group);
 }
 
 function renderStairInterfaceEdge(svg, current, stair, byId) {
@@ -612,7 +698,11 @@ function renderBoundarySvg(svg, current, validation) {
   });
   const markerSize = Math.max(2.8, viewport.width / 150);
   const hitSize = viewport.width / Math.max(svg.clientWidth || 1000, 1) * 34;
+  const stairOnlyVertices = new Set(documentModel.objects
+    .filter((object) => object.type === 'stair' && object.host.boundaryId === current.id)
+    .flatMap((stair) => [stair.anchors.outerStartVertexId, stair.anchors.outerEndVertexId]));
   current.vertices.forEach((vertex) => {
+    if (stairOnlyVertices.has(vertex.id)) return;
     svg.append(svgElement('rect', { x: vertex.x - hitSize / 2, y: vertex.y - hitSize / 2, width: hitSize, height: hitSize, class: 'vertex-hit', 'data-vertex-id': vertex.id, 'data-boundary-id': current.id }));
     svg.append(svgElement('rect', { x: vertex.x - markerSize / 2, y: vertex.y - markerSize / 2, width: markerSize, height: markerSize, rx: markerSize * .12, class: `vertex ${selected.kind === 'vertex' && selected.id === vertex.id ? 'selected' : ''} ${mergeCandidateId === vertex.id ? 'merge-ready' : ''}`, transform: `rotate(45 ${vertex.x} ${vertex.y})` }));
     if (vertex.locked) {
@@ -907,6 +997,7 @@ function setMode(nextMode) {
   chamferDraft = null;
   numericBuffer = '';
   stairGesture = null;
+  stairSideGesture = null;
   railingGesture = null;
   railingDraft = null;
   if (nextMode !== 'level-down') { levelDownDraft = []; levelDownPointer = null; }
@@ -929,6 +1020,7 @@ function canvasPointerDown(svg, event) {
   const vertexId = event.target.dataset.vertexId;
   const edgeId = event.target.dataset.edgeId;
   const stairEdgeId = event.target.dataset.stairEdgeId;
+  const stairSideReferenceId = event.target.dataset.stairSideId;
   const dimensionId = event.target.dataset.dimensionId;
   const railingId = event.target.dataset.railingId;
   const levelDownSegmentId = event.target.dataset.levelDownSegmentId;
@@ -962,7 +1054,7 @@ function canvasPointerDown(svg, event) {
     drawCanvasRefresh();
     return;
   }
-  if (event.pointerType === 'touch' && !['railing', 'level-down'].includes(mode) && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || dimensionId || railingId || levelDownSegmentId)) || (mode === 'stair' && edgeId))) {
+  if (event.pointerType === 'touch' && !['railing', 'level-down'].includes(mode) && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || stairSideReferenceId || dimensionId || railingId || levelDownSegmentId)) || (mode === 'stair' && edgeId))) {
     event.preventDefault();
     activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     svg.setPointerCapture(event.pointerId);
@@ -1018,6 +1110,25 @@ function canvasPointerDown(svg, event) {
     selected = { kind: 'stair-edge', id: stairEdgeId };
     message = 'Deck–Stair interface selected · assign construction properties';
     render();
+    return;
+  }
+  if (mode === 'select' && stairSideReferenceId) {
+    const reference = findStairSide(stairSideReferenceId);
+    if (!reference) return;
+    activateBoundary(reference.stair.host.boundaryId);
+    selected = { kind: 'stair-side', id: stairSideReferenceId };
+    const snapped = reference.side === 'start' ? reference.stair.dimensions.snappedStart : reference.stair.dimensions.snappedEnd;
+    if (snapped) {
+      message = 'Stair side is snapped to the base node';
+      render();
+      return;
+    }
+    stairSideGesture = { pointerId: event.pointerId, document: documentModel, stairId: reference.stair.id, side: reference.side, moved: false };
+    svg.setPointerCapture(event.pointerId);
+    message = 'Drag sideways to change stair width · snaps within 6 inches';
+    refreshContextPanel();
+    drawCanvasRefresh();
+    updateStatusMessage();
     return;
   }
   if (mode === 'select' && vertexId) {
@@ -1245,15 +1356,38 @@ function canvasPointerMove(svg, event) {
     const current = boundary();
     let options = deriveStairDragOptions(current, stairGesture.edgeId, raw, stairGesture.width, stairGesture.startOffset);
     const connection = options ? findStairBoundaryConnection(current, stairGesture.edgeId, stairGesture, boundaries(), raw, viewport.width / Math.max(svg.clientWidth, 1) * 20) : null;
-    if (connection) options = { ...options, ...connection, destination: { boundaryId: connection.boundaryId, edgeId: connection.edgeId } };
+    if (connection) options = { ...options, ...connection, destination: { boundaryId: connection.boundaryId, landing: connection.landing } };
     stairDraft = options
       ? { edgeId: stairGesture.edgeId, ...stairGesture, ...options, dragging: true }
       : { edgeId: stairGesture.edgeId, ...stairGesture, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0, dragging: true };
     const stairSnapLabel = stairGesture.snappedStart && stairGesture.snappedEnd ? 'both sides snapped' : stairGesture.snappedStart || stairGesture.snappedEnd ? 'one side snapped' : 'free opening';
-    message = options ? connection ? `${formatFeetInches(options.totalRise)} rise · connected to lower Deck Boundary · release to build` : `${formatFeetInches(options.totalRise)} total rise · ${stairSnapLabel} · release to build` : 'Drag outward from the deck edge';
+    message = options ? connection ? `${formatFeetInches(options.totalRise, .25)} rise · valid landing inside lower deck · release to build` : `${formatFeetInches(options.totalRise, .25)} total rise · ${stairSnapLabel} · release to build` : 'Drag outward from the deck edge';
     drawCanvasRefresh();
     updateStairLiveHud(event);
     updateStatusMessage();
+    return;
+  }
+  if (stairSideGesture?.pointerId === event.pointerId) {
+    const gesture = stairSideGesture;
+    const sourceBoundary = gesture.document.objects.find((object) => object.type === 'deck-boundary' && object.id === activeBoundaryId);
+    const sourceStair = gesture.document.objects.find((object) => object.type === 'stair' && object.id === gesture.stairId);
+    if (!sourceBoundary || !sourceStair) return;
+    try {
+      const resized = setStairSidePosition(sourceBoundary, sourceStair, gesture.side, raw);
+      let next = upsertObject(gesture.document, markBoundaryEdited(resized.boundary));
+      next = upsertObject(next, resized.stair);
+      documentModel = next;
+      gesture.moved = true;
+      const snapLabel = gesture.side === 'start' ? resized.stair.dimensions.snappedStart : resized.stair.dimensions.snappedEnd;
+      message = `${formatFeetInches(resized.stair.dimensions.width)} stair width${snapLabel ? ' · side snapped to node' : ''}`;
+      persist();
+      drawCanvasRefresh();
+      refreshContextPanel();
+      updateStatusMessage();
+    } catch (error) {
+      message = error.message;
+      updateStatusMessage();
+    }
     return;
   }
   if (draggingEdgeId && edgeDragStart) {
@@ -1405,13 +1539,28 @@ function finishPointerGesture(svg, event) {
     }
     return;
   }
+  if (stairSideGesture?.pointerId === event.pointerId) {
+    const gesture = stairSideGesture;
+    const finalDocument = documentModel;
+    stairSideGesture = null;
+    documentModel = gesture.document;
+    if (event.type === 'pointercancel' || !gesture.moved) {
+      message = event.type === 'pointercancel' ? 'Stair width edit canceled' : 'Stair side selected';
+      persist();
+      render();
+    } else {
+      message = 'Stair width updated · parallel sides preserved';
+      commit(finalDocument, 'Resize staircase from side');
+    }
+    return;
+  }
   if (stairGesture?.pointerId === event.pointerId) {
     const options = stairDraft;
     stairGesture = null;
     app.querySelector('.model-canvas')?.classList.remove('stairing');
-    if (event.type === 'pointercancel' || !options?.totalRise || options.totalRun < 12) {
+    if (event.type === 'pointercancel' || !options?.totalRise || options.totalRun < 10) {
       stairDraft = null;
-      message = event.type === 'pointercancel' ? 'Stair placement canceled' : 'Drag at least 12 inches outward to build stairs';
+      message = event.type === 'pointercancel' ? 'Stair placement canceled' : 'Drag to at least 10 inches of total rise';
       render();
       return;
     }
@@ -1548,6 +1697,32 @@ function removeSelectedRailing() {
   commit(next, 'Remove railing run');
 }
 
+function selectedStairObject() {
+  if (selected.kind === 'stair') return documentModel.objects.find((object) => object.type === 'stair' && object.id === selected.id) ?? null;
+  if (selected.kind === 'dimension') return findStairByDimensionId(selected.id);
+  if (selected.kind === 'stair-side') return findStairSide(selected.id)?.stair ?? null;
+  return null;
+}
+
+function removeSelectedStair() {
+  const stair = selectedStairObject();
+  if (!stair) return;
+  const host = boundaryById(stair.host.boundaryId);
+  if (!host) { message = 'Stair host Deck Boundary was not found'; render(); return; }
+  try {
+    const restored = markBoundaryEdited(detachStairFromBoundary(host, stair));
+    const interfaceId = getStairInterfaceEdge(stair).id;
+    let next = upsertObject(documentModel, restored);
+    next = {
+      ...next,
+      objects: next.objects.filter((object) => object.id !== stair.id && !(object.type === 'railing-run' && (object.host?.ownerId === stair.id || [object.host?.edgeId, object.anchors?.start?.edgeId, object.anchors?.end?.edgeId].includes(interfaceId)))),
+    };
+    selected = { kind: null, id: null };
+    message = 'Stair removed · Deck Boundary restored';
+    commit(next, 'Delete staircase');
+  } catch (error) { message = error.message; render(); }
+}
+
 function adjustSelectedRailingPanels(delta) {
   const geometry = findRailingGeometry(selected.id);
   if (!geometry) return;
@@ -1682,6 +1857,12 @@ function editDimensionReference(referenceId) {
   if (reference.kind === 'railing') {
     selected = { kind: 'railing', id: reference.railing.id };
     message = 'Railing measurement selected · drag a new run to change its extents';
+    render();
+    return;
+  }
+  if (reference.kind === 'stair') {
+    selected = { kind: 'stair', id: reference.stair.id };
+    message = 'Stair selected · edit rise, risers, treads, or width';
     render();
     return;
   }
@@ -1845,10 +2026,33 @@ function handleAction(action) {
     const edge = selected.kind === 'edge' ? boundary().edges.find((entry) => entry.id === selected.id) : findStairInterfaceByEdgeId(selected.id)?.edge;
     if (edge) { message = 'Picture frame property updated'; commitSelectedEdgeProperties({ finishes: { pictureFrame: !normalizeBoundaryEdge(edge).properties.finishes.pictureFrame } }, 'Toggle edge picture frame'); }
   }
-  if (action === 'select-stair-interface' && selected.kind === 'stair') {
-    const stair = documentModel.objects.find((object) => object.type === 'stair' && object.id === selected.id);
+  if (action === 'select-stair-interface' && selectedStairObject()) {
+    const stair = selectedStairObject();
     if (stair) { selected = { kind: 'stair-edge', id: getStairInterfaceEdge(stair).id }; message = 'Deck–Stair interface selected'; render(); }
   }
+  if (action === 'select-stair-object' && selected.kind === 'stair-side') {
+    const stair = findStairSide(selected.id)?.stair;
+    if (stair) { selected = { kind: 'stair', id: stair.id }; message = 'Stair selected'; render(); }
+  }
+  if (action === 'apply-stair-dimensions' && selectedStairObject()) {
+    const stair = selectedStairObject();
+    const host = boundaryById(stair.host.boundaryId);
+    const totalRise = stair.destination ? stair.dimensions.totalRise : parseConstructionLength(app.querySelector('#stair-total-rise')?.value);
+    const riserHeight = parseConstructionLength(app.querySelector('#stair-riser-height')?.value);
+    const treadDepth = parseConstructionLength(app.querySelector('#stair-tread-depth')?.value);
+    if (!host || totalRise === null || riserHeight === null || treadDepth === null) { message = 'Enter valid Stair dimensions'; render(); }
+    else {
+      try {
+        const regenerated = updateStairDimensions(host, stair, { totalRise, riserHeight, treadDepth });
+        let next = upsertObject(documentModel, markBoundaryEdited(regenerated.boundary));
+        next = upsertObject(next, regenerated.stair);
+        selected = { kind: 'stair', id: stair.id };
+        message = `${regenerated.stair.dimensions.riserCount} equal risers · ${regenerated.stair.dimensions.treadCount} equal treads`;
+        commit(next, 'Edit staircase dimensions');
+      } catch (error) { message = error.message; render(); }
+    }
+  }
+  if (action === 'delete-stair' && selectedStairObject()) removeSelectedStair();
   if (action === 'create-rectangle') {
     const width = Number(app.querySelector('#width').value) * 12;
     const depth = Number(app.querySelector('#depth').value) * 12;
@@ -2056,11 +2260,17 @@ function updateStairLiveHud(event = null) {
     hud.style.top = `${Math.max(70, Math.min(panel.height - 190, event.clientY - panel.top - 72))}px`;
   }
   const options = stairDraft;
-  hud.querySelector('[data-stair-live-rise]').textContent = options?.totalRise ? formatFeetInches(options.totalRise) : '0″';
+  hud.querySelector('[data-stair-live-rise]').textContent = options?.totalRise ? formatFeetInches(options.totalRise, .25) : '0″';
   hud.querySelector('[data-stair-live-risers]').textContent = options?.riserCount || '—';
   hud.querySelector('[data-stair-live-treads]').textContent = options?.treadCount || '—';
-  hud.querySelector('[data-stair-live-riser]').textContent = options?.riserHeight ? formatFeetInches(options.riserHeight) : '—';
-  hud.querySelector('[data-stair-live-tread]').textContent = options?.treadDepth ? formatFeetInches(options.treadDepth) : '—';
+  hud.querySelector('[data-stair-live-riser]').textContent = options?.riserHeight ? formatInches(options.riserHeight) : '—';
+  hud.querySelector('[data-stair-live-tread]').textContent = options?.treadDepth ? formatInches(options.treadDepth) : '—';
+  hud.querySelector('[data-stair-live-run]').textContent = options?.totalRun ? formatFeetInches(options.totalRun, .25) : '—';
+  hud.querySelector('[data-stair-live-status]').textContent = options?.destination
+    ? 'VALID LANDING · LOWER DECK'
+    : options?.usesExtendedRiserRange
+      ? 'EXTENDED 5″–6″ RISER RANGE · REVIEW'
+      : 'Release to build · 5″–7.5″ risers · 10″–11″ treads';
 }
 
 function updateStatusMessage() {
