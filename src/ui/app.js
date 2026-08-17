@@ -554,15 +554,38 @@ function drawCanvas(svg, current, validation) {
       const visibleBoundary = chamferDraft?.boundary?.id === deck.id ? chamferDraft.boundary : deck;
       renderStairGraphics(svg, visibleBoundary);
     });
-    if (chamferDraft) renderChamferDimension(svg, chamferDraft);
     renderStairPreview(svg, current);
     renderRailingGraphics(svg);
+    if (getDimensionLayer(documentModel).visible) {
+      boundaries().forEach((deck) => {
+        const visibleBoundary = chamferDraft?.boundary?.id === deck.id ? chamferDraft.boundary : deck;
+        renderBoundaryDimensions(svg, visibleBoundary);
+        renderLevelDownDimensions(svg, visibleBoundary);
+        renderStairDimensions(svg, visibleBoundary);
+      });
+      renderRailingDimensions(svg);
+      if (chamferDraft) renderChamferDimension(svg, chamferDraft);
+    }
   }
   if (draft.length) renderDraft(svg);
 }
 
 function renderStairGraphics(svg, current) {
   documentModel.objects.filter((object) => object.type === 'stair' && object.host.boundaryId === current.id).forEach((stair) => renderStairShape(svg, current, stair, false));
+}
+
+function renderStairDimensions(svg, current) {
+  const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+  documentModel.objects.filter((object) => object.type === 'stair' && object.host.boundaryId === current.id).forEach((stair) => {
+    const points = [stair.anchors.openingStartVertexId, stair.anchors.outerStartVertexId, stair.anchors.outerEndVertexId, stair.anchors.openingEndVertexId]
+      .map((id) => byId.get(id)).filter(Boolean);
+    if (points.length !== 4) return;
+    renderStairDimension(svg, current, stair, points);
+    const edge = getStairInterfaceEdge(stair);
+    const start = byId.get(edge.startVertexId);
+    const end = byId.get(edge.endVertexId);
+    if (start && end) addDimension(svg, start, end, edge.id);
+  });
 }
 
 function renderStairPreview(svg, current) {
@@ -602,7 +625,6 @@ function renderStairShape(svg, current, stair, preview) {
     renderStairSide(svg, current, stair, 'start', polygonPoints[0], polygonPoints[1]);
     renderStairSide(svg, current, stair, 'end', polygonPoints[3], polygonPoints[2]);
     renderStairInterfaceEdge(svg, current, stair, byId);
-    if (getDimensionLayer(documentModel).visible) renderStairDimension(svg, current, stair, polygonPoints);
   }
 }
 
@@ -652,7 +674,6 @@ function renderStairInterfaceEdge(svg, current, stair, byId) {
   const selectedClass = selected.kind === 'stair-edge' && selected.id === edge.id ? 'selected' : '';
   svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `stair-interface-visible ${selectedClass}` }));
   svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'stair-interface-hit', 'data-stair-edge-id': edge.id }));
-  if (getDimensionLayer(documentModel).visible) addDimension(svg, start, end, edge.id);
 }
 
 function renderRailingGraphics(svg) {
@@ -673,6 +694,11 @@ function renderRailingGraphics(svg) {
   });
 }
 
+function renderRailingDimensions(svg) {
+  if (!getRailingLayer(documentModel).visible) return;
+  getAllRailingGeometries().forEach((geometry) => addDimension(svg, geometry.start, geometry.end, geometry.railing.id));
+}
+
 function renderRailingGeometry(svg, geometry, preview) {
   const selectedClass = !preview && selected.kind === 'railing' && selected.id === geometry.railing.id ? 'selected' : '';
   svg.append(svgElement('line', { x1: geometry.start.x, y1: geometry.start.y, x2: geometry.end.x, y2: geometry.end.y, class: `railing-run-visible ${preview ? 'preview' : ''} ${selectedClass}` }));
@@ -682,7 +708,6 @@ function renderRailingGeometry(svg, geometry, preview) {
   });
   if (!preview) {
     svg.append(svgElement('line', { x1: geometry.start.x, y1: geometry.start.y, x2: geometry.end.x, y2: geometry.end.y, class: 'railing-run-hit', 'data-railing-id': geometry.railing.id }));
-    if (getDimensionLayer(documentModel).visible) addDimension(svg, geometry.start, geometry.end, geometry.railing.id);
   }
 }
 
@@ -699,8 +724,6 @@ function renderBoundarySvg(svg, current, validation) {
     svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `boundary-edge-visible ${edge.role} ${selectedClass}` }));
     const hit = svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'boundary-edge', 'data-edge-id': edge.id, 'data-boundary-id': current.id });
     svg.append(hit);
-    const temporaryChamferDimension = chamferDraft?.boundary?.id === current.id && chamferDraft.chamferEdgeId === edge.id;
-    if (getDimensionLayer(documentModel).visible && !temporaryChamferDimension) addDimension(svg, start, end, edge.id);
   });
   const markerSize = Math.max(2.8, viewport.width / 150);
   const hitSize = viewport.width / Math.max(svg.clientWidth || 1000, 1) * 34;
@@ -717,7 +740,15 @@ function renderBoundarySvg(svg, current, validation) {
       svg.append(lock);
     }
   });
-  if (getDimensionLayer(documentModel).visible) renderAreaDimension(svg, current);
+}
+
+function renderBoundaryDimensions(svg, current) {
+  current.edges.forEach((edge, index) => {
+    const temporaryChamferDimension = chamferDraft?.boundary?.id === current.id && chamferDraft.chamferEdgeId === edge.id;
+    if (temporaryChamferDimension) return;
+    addDimension(svg, current.vertices[index], current.vertices[(index + 1) % current.vertices.length], edge.id);
+  });
+  renderAreaDimension(svg, current);
 }
 
 function renderAreaDimension(svg, current) {
@@ -763,13 +794,19 @@ function renderLevelDownGraphics(svg, current) {
       if (levelDown.properties?.finishes?.fascia) svg.append(svgElement('line', { x1: start.x - normal.x * 2, y1: start.y - normal.y * 2, x2: end.x - normal.x * 2, y2: end.y - normal.y * 2, class: 'level-down-fascia' }));
       svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'level-down-hit', 'data-level-down-segment-id': segment.id }));
     });
-    if (region && getDimensionLayer(documentModel).visible) renderLevelDownDimension(svg, levelDown, region, getLevelDownDepth(levelDown, current));
   });
   if (levelDownDraft.length) {
     const points = [...levelDownDraft.map((entry) => entry.point), ...(levelDownPointer ? [levelDownPointer.point] : [])];
     svg.append(svgElement('polyline', { points: points.map((entry) => `${entry.x},${entry.y}`).join(' '), class: 'level-down-preview', fill: 'none' }));
     points.forEach((point) => svg.append(svgElement('rect', { x: point.x - 2.5, y: point.y - 2.5, width: 5, height: 5, class: 'level-down-marker', transform: `rotate(45 ${point.x} ${point.y})` })));
   }
+}
+
+function renderLevelDownDimensions(svg, current) {
+  documentModel.objects.filter((object) => object.type === 'level-down' && object.host.boundaryId === current.id).forEach((levelDown) => {
+    const region = deriveLevelDownRegion(levelDown, current);
+    if (region) renderLevelDownDimension(svg, levelDown, region, getLevelDownDepth(levelDown, current));
+  });
 }
 
 function renderLevelDownDimension(svg, levelDown, region, totalDepth) {
