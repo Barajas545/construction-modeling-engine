@@ -639,6 +639,13 @@ function renderStairSide(svg, current, stair, side, start, end) {
       : { 'data-stair-side-id': referenceId, 'data-boundary-id': stair.host.boundaryId };
     svg.append(svgElement('line', { x1: segment.start.x, y1: segment.start.y, x2: segment.end.x, y2: segment.end.y, class: `stair-side-hit ${segment.role}`, ...attributes }));
   });
+  const stairEditing = (selected.kind === 'stair' && selected.id === stair.id)
+    || (selected.kind === 'dimension' && selected.id === stairDimensionId(stair));
+  if (stairEditing) {
+    const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+    svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'stair-side-edit-hit', 'data-stair-side-id': referenceId, 'data-boundary-id': stair.host.boundaryId }));
+    svg.append(svgElement('circle', { cx: midpoint.x, cy: midpoint.y, r: Math.max(3.2, viewport.width / 190), class: 'stair-side-edit-handle' }));
+  }
 }
 
 function renderStairDimension(svg, current, stair, points) {
@@ -1161,14 +1168,9 @@ function canvasPointerDown(svg, event) {
     activateBoundary(reference.stair.host.boundaryId);
     selected = { kind: 'stair-side', id: stairSideReferenceId };
     const snapped = reference.side === 'start' ? reference.stair.dimensions.snappedStart : reference.stair.dimensions.snappedEnd;
-    if (snapped) {
-      message = 'Stair side is snapped to the base node';
-      render();
-      return;
-    }
     stairSideGesture = { pointerId: event.pointerId, document: documentModel, stairId: reference.stair.id, side: reference.side, moved: false };
     svg.setPointerCapture(event.pointerId);
-    message = 'Drag sideways to change stair width · snaps within 6 inches';
+    message = snapped ? 'Drag sideways to detach this stair side from the node' : 'Drag sideways to change stair width · snaps within 6 inches';
     refreshContextPanel();
     drawCanvasRefresh();
     updateStatusMessage();
@@ -1429,7 +1431,7 @@ function canvasPointerMove(svg, event) {
       next = upsertObject(next, resized.stair);
       documentModel = next;
       gesture.moved = true;
-      const snapLabel = resized.snap?.type === 'edge' ? ' · side snapped to boundary edge' : resized.snap?.type === 'node' ? ' · side snapped to node' : '';
+      const snapLabel = resized.detachedFromNode ? ' · side detached from node' : resized.snap?.type === 'edge' ? ' · side snapped to boundary edge' : resized.snap?.type === 'node' ? ' · side snapped to node' : '';
       message = `${formatFeetInches(resized.stair.dimensions.width)} stair width${snapLabel}`;
       persist();
       drawCanvasRefresh();

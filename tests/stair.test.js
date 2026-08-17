@@ -228,6 +228,35 @@ test('a stair side snaps to a nearby boundary edge and exposes shared and remain
   assert.equal(segments[0].boundaryId, adjacent.id);
 });
 
+test('stair side edge snap is orientation-independent for a vertical host edge', () => {
+  const makeId = ids();
+  const host = createDeckBoundary([{ x: 0, y: 0 }, { x: 120, y: 0 }, { x: 120, y: 144 }, { x: 0, y: 144 }], { idFactory: makeId });
+  const adjacent = createDeckBoundary([{ x: 120, y: 6 }, { x: 180, y: 6 }, { x: 180, y: 30 }, { x: 120, y: 30 }], { idFactory: makeId });
+  const attached = attachStairToBoundary(host, host.edges[1].id, { width: 36, startOffset: 10, totalRise: 24, treadDepth: 10 }, makeId);
+  const resized = setStairSidePosition(attached.boundary, attached.stair, 'start', { x: 135, y: 9 }, makeId, [attached.boundary, adjacent]);
+  assert.equal(resized.snap.type, 'edge');
+  assert.equal(resized.snap.boundaryId, adjacent.id);
+  const byId = new Map(resized.boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  assert.equal(byId.get(resized.stair.anchors.openingStartVertexId).y, 6);
+  assert.equal(byId.get(resized.stair.anchors.outerStartVertexId).y, 6);
+});
+
+test('a stair side snapped to a host node can detach without moving the deck node', () => {
+  const makeId = ids();
+  const host = createDeckBoundary([{ x: 0, y: 0 }, { x: 120, y: 0 }, { x: 120, y: 144 }, { x: 0, y: 144 }], { idFactory: makeId });
+  const attached = attachStairToBoundary(host, host.edges[0].id, { width: 36, startOffset: 10, totalRise: 24, treadDepth: 10 }, makeId);
+  const snapped = setStairSidePosition(attached.boundary, attached.stair, 'start', { x: 4, y: -10 }, makeId);
+  const detached = setStairSidePosition(snapped.boundary, snapped.stair, 'start', { x: 12, y: -10 }, makeId);
+  assert.equal(detached.detachedFromNode, true);
+  assert.equal(detached.stair.dimensions.snappedStart, false);
+  assert.notEqual(detached.stair.anchors.openingStartVertexId, host.vertices[0].id);
+  const byId = new Map(detached.boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  assert.equal(byId.get(host.vertices[0].id).x, 0);
+  assert.equal(byId.get(host.vertices[0].id).y, 0);
+  assert.equal(byId.get(detached.stair.anchors.openingStartVertexId).x, 12);
+  assert.equal(byId.get(detached.stair.anchors.outerStartVertexId).x, 12);
+});
+
 test('deleting a stair restores a valid Deck Boundary', () => {
   const makeId = ids();
   const boundary = createDeckBoundary([{ x: 0, y: 0 }, { x: 192, y: 0 }, { x: 192, y: 144 }, { x: 0, y: 144 }], { idFactory: makeId });

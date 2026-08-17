@@ -99,6 +99,8 @@ button { color: inherit; }
 .stair-side-visible.invalid { stroke: var(--danger); }
 .stair-side-hit { stroke: transparent; stroke-width: 20; vector-effect: non-scaling-stroke; cursor: ew-resize; }
 .stair-side-hit.shared-boundary { cursor: pointer; }
+.stair-side-edit-hit { stroke: transparent; stroke-width: 24; vector-effect: non-scaling-stroke; cursor: move; }
+.stair-side-edit-handle { fill: var(--accent); stroke: #0d1114; stroke-width: 1.4; vector-effect: non-scaling-stroke; pointer-events: none; filter: drop-shadow(0 0 4px rgb(216 255 98 / 65%)); }
 .vertex { fill: #0d1114; stroke: #f1f5f4; stroke-width: 1.6; vector-effect: non-scaling-stroke; pointer-events: none; }
 .vertex-hit { fill: transparent; cursor: grab; }
 .vertex.selected { fill: var(--accent); stroke: #fff; }

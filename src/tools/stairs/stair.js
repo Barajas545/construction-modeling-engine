@@ -492,7 +492,7 @@ export function setStairSidePosition(boundary, stair, side, point, idFactoryOrBo
   const idFactory = Array.isArray(idFactoryOrBoundaries) ? defaultId : idFactoryOrBoundaries;
   const snapBoundaries = Array.isArray(idFactoryOrBoundaries) ? idFactoryOrBoundaries : candidateBoundaries;
   if (!['start', 'end'].includes(side)) throw new Error('Select a valid stair side.');
-  if ((side === 'start' && stair.dimensions.snappedStart) || (side === 'end' && stair.dimensions.snappedEnd)) throw new Error('This stair side is snapped to the base node. Recreate the stair to detach it.');
+  const wasNodeSnapped = side === 'start' ? stair.dimensions.snappedStart : stair.dimensions.snappedEnd;
   const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
   const topStart = byId.get(stair.anchors.openingStartVertexId);
   const topEnd = byId.get(stair.anchors.openingEndVertexId);
@@ -525,8 +525,21 @@ export function setStairSidePosition(boundary, stair, side, point, idFactoryOrBo
     ...stair.sideAttachments,
     [side]: boundarySnap ? { boundaryId: boundarySnap.boundaryId, edgeId: boundarySnap.edgeId, relationship: 'shared-boundary' } : null,
   };
-  let vertices = boundary.vertices.map((vertex) => [movingTop.id, movingOuter.id].includes(vertex.id) ? { ...vertex, x: vertex.x + delta.x, y: vertex.y + delta.y } : vertex);
-  if (shouldSnap) {
+  let vertices;
+  if (wasNodeSnapped && !shouldSnap) {
+    const detachedTop = { id: idFactory('vertex'), x: desired.x, y: desired.y, elevation: movingTop.elevation ?? 0 };
+    nextStair.anchors[side === 'start' ? 'openingStartVertexId' : 'openingEndVertexId'] = detachedTop.id;
+    nextStair.interfaceEdge = { ...nextStair.interfaceEdge, [side === 'start' ? 'startVertexId' : 'endVertexId']: detachedTop.id };
+    vertices = boundary.vertices.flatMap((vertex) => {
+      const moved = vertex.id === movingOuter.id ? { ...vertex, x: vertex.x + delta.x, y: vertex.y + delta.y } : vertex;
+      if (side === 'start' && vertex.id === movingOuter.id) return [detachedTop, moved];
+      if (side === 'end' && vertex.id === movingTop.id) return [detachedTop, moved];
+      return [moved];
+    });
+  } else {
+    vertices = boundary.vertices.map((vertex) => [movingTop.id, movingOuter.id].includes(vertex.id) ? { ...vertex, x: vertex.x + delta.x, y: vertex.y + delta.y } : vertex);
+  }
+  if (shouldSnap && !wasNodeSnapped) {
     const target = side === 'start' ? hostStart : hostEnd;
     nextStair.anchors[side === 'start' ? 'openingStartVertexId' : 'openingEndVertexId'] = target.id;
     nextStair.interfaceEdge = { ...nextStair.interfaceEdge, [side === 'start' ? 'startVertexId' : 'endVertexId']: target.id };
@@ -549,6 +562,7 @@ export function setStairSidePosition(boundary, stair, side, point, idFactoryOrBo
     boundary: resizedBoundary,
     stair: { ...nextStair, lifecycle: { ...nextStair.lifecycle, revision: (nextStair.lifecycle?.revision ?? 1) + 1 } },
     snap: shouldSnap ? { type: 'node', vertexId: (side === 'start' ? hostStart : hostEnd).id } : boundarySnap,
+    detachedFromNode: wasNodeSnapped && !shouldSnap,
   };
 }
 

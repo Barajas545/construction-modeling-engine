@@ -24,6 +24,8 @@ Established stairs own a centered Dimensions-layer annotation and editable total
 
 Lateral-line dragging also searches parallel Construction Edges across every Deck Boundary within six inches. A successful edge snap preserves side parallelism, stores the shared-boundary relationship, and derives separate selectable intervals for the Stair/Boundary overlap and any remaining Stair-only or Boundary-only continuation without duplicating geometry.
 
+Edge snapping is orientation-independent. A side snapped to a host node is not permanently fused: selecting the Stair annotation exposes lateral edit handles, and dragging away recreates the opening anchor while leaving the Deck Boundary node fixed.
+
 When a stair side and an adjacent Deck Boundary are collinear, divide the visible line into semantic selection intervals. The overlapping interval selects as the shared Construction Edge; any continuation selects as Stair-only geometry. This applies whether the boundary interval is longer or shorter than total run and avoids duplicate coincident lines.
 
 The host-edge angle is protected while the Stair relationship exists. CME first attempts to regenerate when connected levels change. If equal-riser, equal-tread, valid boundary, or landing containment constraints cannot be satisfied, retain the Stair, mark it red, record the review reason, and exclude it from future quantity and cost calculations. Provide a direct **Delete stairs** action that restores the host Deck Boundary so the user can create a new valid Stair.
