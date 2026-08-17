@@ -83,6 +83,35 @@ export function deriveStairOpeningSnap(boundary, edgeId, pointer, preferredWidth
   return { width: openingEnd - openingStart, startOffset: openingStart, snappedStart, snappedEnd };
 }
 
+export function resolveStairHostEdge(clickedBoundary, edgeId, candidateBoundaries, pointer, tolerance = 1) {
+  const clickedEdge = clickedBoundary?.edges.find((edge) => edge.id === edgeId);
+  if (!clickedEdge) return null;
+  const clickedById = new Map(clickedBoundary.vertices.map((vertex) => [vertex.id, vertex]));
+  const clickedStart = clickedById.get(clickedEdge.startVertexId);
+  const clickedEnd = clickedById.get(clickedEdge.endVertexId);
+  if (!clickedStart || !clickedEnd) return null;
+  const clickedLength = distance(clickedStart, clickedEnd);
+  if (clickedLength < 1e-8 || nearestOnSegment(pointer, clickedStart, clickedEnd).distance > tolerance) return null;
+  const clickedUnit = { x: (clickedEnd.x - clickedStart.x) / clickedLength, y: (clickedEnd.y - clickedStart.y) / clickedLength };
+  const candidates = [];
+  for (const boundary of candidateBoundaries) {
+    const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
+    for (const edge of boundary.edges) {
+      if (edge.properties?.attachments?.stairId || edge.properties?.custom?.locked) continue;
+      const start = byId.get(edge.startVertexId);
+      const end = byId.get(edge.endVertexId);
+      if (!start || !end) continue;
+      const edgeLength = distance(start, end);
+      if (edgeLength < 24 || nearestOnSegment(pointer, start, end).distance > tolerance) continue;
+      const unit = { x: (end.x - start.x) / edgeLength, y: (end.y - start.y) / edgeLength };
+      if (Math.abs(clickedUnit.x * unit.x + clickedUnit.y * unit.y) < .999) continue;
+      const levelDown = Math.max(0, Number(boundary.metadata?.levelDownInches ?? 0));
+      candidates.push({ boundary, edgeId: edge.id, levelDown, clicked: boundary.id === clickedBoundary.id && edge.id === edgeId });
+    }
+  }
+  return candidates.sort((a, b) => a.levelDown - b.levelDown || Number(b.clicked) - Number(a.clicked))[0] ?? null;
+}
+
 export function deriveStairDragOptions(boundary, edgeId, pointer, width = 36, startOffset = null) {
   const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
   if (edgeIndex < 0) return null;
@@ -195,7 +224,8 @@ function nearestOnSegment(point, start, end) {
   const dy = end.y - start.y;
   const denominator = dx * dx + dy * dy;
   const t = denominator ? Math.max(0, Math.min(1, ((point.x - start.x) * dx + (point.y - start.y) * dy) / denominator)) : 0;
-  return { point: { x: start.x + dx * t, y: start.y + dy * t }, t };
+  const projectedPoint = { x: start.x + dx * t, y: start.y + dy * t };
+  return { point: projectedPoint, t, distance: distance(point, projectedPoint) };
 }
 
 function pointOnSegment(point, start, end, tolerance = 1e-6) {

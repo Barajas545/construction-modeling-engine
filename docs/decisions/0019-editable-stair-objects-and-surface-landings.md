@@ -16,6 +16,8 @@ Treat total rise as the primary live drag value. Solve an integer riser count wi
 
 Connect decks only when the entire lower stair line fits inside a lower Deck Boundary polygon. Store the destination Deck Boundary identity and landing geometry, not a destination edge dependency. Deck elevation difference becomes authoritative total rise for connected stairs.
 
+When independently modeled decks have coincident edges, resolve the Stair host before beginning the drag. Among the matching unlocked construction edges under the pointer, choose the surface with the smallest down-level value so the higher deck owns the Stair and the outward drag can enter the lower deck.
+
 Established stairs own a centered Dimensions-layer annotation and editable total rise, riser, and tread fields. Editing regenerates the same object and preserves anchor identities. Lateral-line dragging changes width while maintaining parallel sides; either opening side snaps to a host node within six inches. Generated outer Stair nodes are not direct geometry-editing handles.
 
 When a stair side and an adjacent Deck Boundary are collinear, divide the visible line into semantic selection intervals. The overlapping interval selects as the shared Construction Edge; any continuation selects as Stair-only geometry. This applies whether the boundary interval is longer or shorter than total run and avoids duplicate coincident lines.
@@ -27,6 +29,7 @@ The host-edge angle is protected while the Stair relationship exists. CME first 
 - Live feedback and completed geometry describe the same construction dimensions.
 - A 24-inch level difference naturally produces four 6-inch risers and three equal treads.
 - Lower decks are usable landing surfaces rather than artificial edge targets.
+- Shared-edge hit order cannot accidentally make the lower deck the Stair host.
 - Stair width can change without creating trapezoids or nonparallel stringers.
 - Invalid relationships remain visible and understandable instead of silently deforming or disappearing.
 - Stair deletion is a topology operation, not merely object-record removal.
