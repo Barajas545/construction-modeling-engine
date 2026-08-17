@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeckBoundary, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
-import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, mergeStairBoundaryConnection, resolveStairHostEdge, setStairSidePosition, setStairWidth, solveStairLayout, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../src/tools/stairs/stair.js';
+import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, materializeStairSideJunction, mergeStairBoundaryConnection, removeStairSideJunction, resolveStairHostEdge, setStairSidePosition, setStairWidth, solveStairLayout, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../src/tools/stairs/stair.js';
 
 function ids() { let count = 0; return (prefix) => `${prefix}-${++count}`; }
 
@@ -239,6 +239,46 @@ test('stair side edge snap is orientation-independent for a vertical host edge',
   const byId = new Map(resized.boundary.vertices.map((vertex) => [vertex.id, vertex]));
   assert.equal(byId.get(resized.stair.anchors.openingStartVertexId).y, 6);
   assert.equal(byId.get(resized.stair.anchors.outerStartVertexId).y, 6);
+});
+
+test('a stair side connection creates selectable junction nodes and splits the receiving boundary', () => {
+  const makeId = ids();
+  const host = createDeckBoundary([{ x: 30, y: 0 }, { x: 150, y: 0 }, { x: 150, y: 144 }, { x: 30, y: 144 }], { idFactory: makeId });
+  const adjacent = createDeckBoundary([{ x: -20, y: -40 }, { x: 36, y: -40 }, { x: 36, y: 15 }, { x: -20, y: 15 }], { idFactory: makeId });
+  const attached = attachStairToBoundary(host, host.edges[0].id, { width: 36, startOffset: 10, totalRise: 24, treadDepth: 10 }, makeId);
+  const resized = setStairSidePosition(attached.boundary, attached.stair, 'start', { x: 39, y: -12 }, makeId, [attached.boundary, adjacent]);
+  const connected = materializeStairSideJunction(resized.boundary, adjacent, resized.stair, 'start', makeId);
+  const junction = connected.stair.sideAttachments.start.junction;
+
+  assert.equal(connected.boundary.vertices.length, adjacent.vertices.length + 2);
+  assert.equal(connected.boundary.edges.length, adjacent.edges.length + 2);
+  assert.equal(junction.insertedVertexIds.length, 2);
+  assert.equal(junction.sharedEdgeIds.length, 1);
+  assert.ok(connected.boundary.vertices.filter((vertex) => junction.insertedVertexIds.includes(vertex.id)).every((vertex) => vertex.junction?.stairId === connected.stair.id));
+  assert.ok(connected.boundary.edges.find((edge) => edge.id === junction.sharedEdgeIds[0]).properties.custom.stairSideJunctions.some((entry) => entry.stairId === connected.stair.id));
+  assert.equal(validateDeckBoundary(connected.boundary).valid, true);
+
+  const disconnected = removeStairSideJunction(connected.boundary, connected.stair, 'start');
+  assert.equal(disconnected.boundary.vertices.length, adjacent.vertices.length);
+  assert.equal(disconnected.boundary.edges.length, adjacent.edges.length);
+  assert.equal(disconnected.stair.sideAttachments.start, null);
+  assert.equal(validateDeckBoundary(disconnected.boundary).valid, true);
+});
+
+test('a connected stair side uses release hysteresis and can detach from its receiving boundary', () => {
+  const makeId = ids();
+  const host = createDeckBoundary([{ x: 30, y: 0 }, { x: 150, y: 0 }, { x: 150, y: 144 }, { x: 30, y: 144 }], { idFactory: makeId });
+  const adjacent = createDeckBoundary([{ x: -20, y: -40 }, { x: 36, y: -40 }, { x: 36, y: 15 }, { x: -20, y: 15 }], { idFactory: makeId });
+  const attached = attachStairToBoundary(host, host.edges[0].id, { width: 36, startOffset: 10, totalRise: 24, treadDepth: 10 }, makeId);
+  const snapped = setStairSidePosition(attached.boundary, attached.stair, 'start', { x: 39, y: -12 }, makeId, [attached.boundary, adjacent]);
+  const held = setStairSidePosition(snapped.boundary, snapped.stair, 'start', { x: 43, y: -12 }, makeId, [snapped.boundary, adjacent]);
+  const detached = setStairSidePosition(snapped.boundary, snapped.stair, 'start', { x: 46, y: -12 }, makeId, [snapped.boundary, adjacent]);
+
+  assert.equal(held.snap.type, 'edge');
+  assert.equal(held.stair.sideAttachments.start.boundaryId, adjacent.id);
+  assert.equal(detached.snap, null);
+  assert.equal(detached.detachedFromBoundary, true);
+  assert.equal(detached.stair.sideAttachments.start, null);
 });
 
 test('a stair side snapped to a host node can detach without moving the deck node', () => {

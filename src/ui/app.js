@@ -13,7 +13,7 @@ import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
-import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, mergeStairBoundaryConnection, resolveStairHostEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
+import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, materializeStairSideJunction, mergeStairBoundaryConnection, removeStairSideJunction, resolveStairHostEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -208,7 +208,8 @@ function renderContextPanel(current) {
     const reference = findStairSide(selected.id);
     if (!reference) return '';
     const snapped = reference.side === 'start' ? reference.stair.dimensions.snappedStart : reference.stair.dimensions.snappedEnd;
-    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected stair side</div><h2>${reference.side === 'start' ? 'Left' : 'Right'} side · ${formatFeetInches(reference.stair.dimensions.totalRun)}</h2></div>${close}</div><div class="constraint-status active"><span>●</span>${snapped ? 'Snapped to base node · fixed in place' : 'Drag sideways to change stair width'}</div><div class="context-actions"><button class="button" data-action="select-stair-object">Stair properties</button><button class="button danger" data-action="delete-stair">Delete stairs</button></div></section>`;
+    const boundaryAttached = Boolean(reference.stair.sideAttachments?.[reference.side]);
+    return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected stair side</div><h2>${reference.side === 'start' ? 'Left' : 'Right'} side · ${formatFeetInches(reference.stair.dimensions.totalRun)}</h2></div>${close}</div><div class="constraint-status active"><span>●</span>${snapped ? 'Snapped to base node · drag away to detach' : boundaryAttached ? 'Shared boundary connection · drag away to detach' : 'Drag sideways to change stair width'}</div><div class="context-actions"><button class="button" data-action="select-stair-object">Stair properties</button><button class="button danger" data-action="delete-stair">Delete stairs</button></div></section>`;
   }
   if (selected.kind === 'vertex') {
     const locked = isVertexLocked(current, selected.id);
@@ -563,7 +564,6 @@ function drawCanvas(svg, current, validation) {
         renderLevelDownDimensions(svg, visibleBoundary);
         renderStairDimensions(svg, visibleBoundary);
       });
-      renderRailingDimensions(svg);
       if (chamferDraft) renderChamferDimension(svg, chamferDraft);
     }
   }
@@ -640,7 +640,8 @@ function renderStairSide(svg, current, stair, side, start, end) {
     svg.append(svgElement('line', { x1: segment.start.x, y1: segment.start.y, x2: segment.end.x, y2: segment.end.y, class: `stair-side-hit ${segment.role}`, ...attributes }));
   });
   const stairEditing = (selected.kind === 'stair' && selected.id === stair.id)
-    || (selected.kind === 'dimension' && selected.id === stairDimensionId(stair));
+    || (selected.kind === 'dimension' && selected.id === stairDimensionId(stair))
+    || (selected.kind === 'stair-side' && selected.id === referenceId);
   if (stairEditing) {
     const midpoint = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
     svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'stair-side-edit-hit', 'data-stair-side-id': referenceId, 'data-boundary-id': stair.host.boundaryId }));
@@ -701,11 +702,6 @@ function renderRailingGraphics(svg) {
   });
 }
 
-function renderRailingDimensions(svg) {
-  if (!getRailingLayer(documentModel).visible) return;
-  getAllRailingGeometries().forEach((geometry) => addDimension(svg, geometry.start, geometry.end, geometry.railing.id));
-}
-
 function renderRailingGeometry(svg, geometry, preview) {
   const selectedClass = !preview && selected.kind === 'railing' && selected.id === geometry.railing.id ? 'selected' : '';
   svg.append(svgElement('line', { x1: geometry.start.x, y1: geometry.start.y, x2: geometry.end.x, y2: geometry.end.y, class: `railing-run-visible ${preview ? 'preview' : ''} ${selectedClass}` }));
@@ -752,7 +748,8 @@ function renderBoundarySvg(svg, current, validation) {
 function renderBoundaryDimensions(svg, current) {
   current.edges.forEach((edge, index) => {
     const temporaryChamferDimension = chamferDraft?.boundary?.id === current.id && chamferDraft.chamferEdgeId === edge.id;
-    if (temporaryChamferDimension) return;
+    const stairGeneratedDimension = Boolean(edge.properties?.attachments?.stairId);
+    if (temporaryChamferDimension || stairGeneratedDimension) return;
     addDimension(svg, current.vertices[index], current.vertices[(index + 1) % current.vertices.length], edge.id);
   });
   renderAreaDimension(svg, current);
@@ -1168,7 +1165,26 @@ function canvasPointerDown(svg, event) {
     activateBoundary(reference.stair.host.boundaryId);
     selected = { kind: 'stair-side', id: stairSideReferenceId };
     const snapped = reference.side === 'start' ? reference.stair.dimensions.snappedStart : reference.stair.dimensions.snappedEnd;
-    stairSideGesture = { pointerId: event.pointerId, document: documentModel, stairId: reference.stair.id, side: reference.side, moved: false };
+    const originalDocument = documentModel;
+    let editDocument = documentModel;
+    const attachment = reference.stair.sideAttachments?.[reference.side];
+    if (attachment?.junction) {
+      const targetBoundary = boundaryById(attachment.boundaryId);
+      if (targetBoundary) {
+        const removed = removeStairSideJunction(targetBoundary, reference.stair, reference.side);
+        const editableAttachment = {
+          boundaryId: attachment.boundaryId,
+          edgeId: attachment.junction.originalEdge.id,
+          relationship: 'shared-boundary',
+        };
+        const editableStair = {
+          ...removed.stair,
+          sideAttachments: { ...removed.stair.sideAttachments, [reference.side]: editableAttachment },
+        };
+        editDocument = upsertObject(upsertObject(editDocument, removed.boundary), editableStair);
+      }
+    }
+    stairSideGesture = { pointerId: event.pointerId, document: originalDocument, editDocument, stairId: reference.stair.id, side: reference.side, moved: false };
     svg.setPointerCapture(event.pointerId);
     message = snapped ? 'Drag sideways to detach this stair side from the node' : 'Drag sideways to change stair width · snaps within 6 inches';
     refreshContextPanel();
@@ -1179,6 +1195,8 @@ function canvasPointerDown(svg, event) {
   if (mode === 'select' && vertexId) {
     selected = { kind: 'vertex', id: vertexId };
     if (isVertexLocked(boundary(), vertexId)) { message = 'Node is locked in place'; render(); return; }
+    const selectedVertex = boundary().vertices.find((vertex) => vertex.id === vertexId);
+    if (selectedVertex?.junction?.type === 'stair-side') { message = 'This junction follows the connected stair side · drag the stair side to detach it'; render(); return; }
     const vertexIndex = boundary().vertices.findIndex((vertex) => vertex.id === vertexId);
     if ([boundary().edges[vertexIndex], boundary().edges[(vertexIndex - 1 + boundary().edges.length) % boundary().edges.length]].some((edge) => isEdgeLocked(boundary(), edge.id))) { message = 'A connected construction edge is locked'; render(); return; }
     draggingVertexId = vertexId;
@@ -1421,17 +1439,25 @@ function canvasPointerMove(svg, event) {
   }
   if (stairSideGesture?.pointerId === event.pointerId) {
     const gesture = stairSideGesture;
-    const sourceBoundary = gesture.document.objects.find((object) => object.type === 'deck-boundary' && object.id === activeBoundaryId);
-    const sourceStair = gesture.document.objects.find((object) => object.type === 'stair' && object.id === gesture.stairId);
+    const sourceBoundary = gesture.editDocument.objects.find((object) => object.type === 'deck-boundary' && object.id === activeBoundaryId);
+    const sourceStair = gesture.editDocument.objects.find((object) => object.type === 'stair' && object.id === gesture.stairId);
     if (!sourceBoundary || !sourceStair) return;
     try {
-      const snapBoundaries = gesture.document.objects.filter((object) => object.type === 'deck-boundary');
+      const snapBoundaries = gesture.editDocument.objects.filter((object) => object.type === 'deck-boundary');
       const resized = setStairSidePosition(sourceBoundary, sourceStair, gesture.side, raw, snapBoundaries);
-      let next = upsertObject(gesture.document, markBoundaryEdited(resized.boundary));
+      let next = upsertObject(gesture.editDocument, markBoundaryEdited(resized.boundary));
       next = upsertObject(next, resized.stair);
       documentModel = next;
       gesture.moved = true;
-      const snapLabel = resized.detachedFromNode ? ' · side detached from node' : resized.snap?.type === 'edge' ? ' · side snapped to boundary edge' : resized.snap?.type === 'node' ? ' · side snapped to node' : '';
+      const snapLabel = resized.detachedFromNode
+        ? ' · side detached from node'
+        : resized.detachedFromBoundary
+          ? ' · side detached from boundary'
+          : resized.snap?.type === 'edge'
+            ? ' · side snapped to boundary edge'
+            : resized.snap?.type === 'node'
+              ? ' · side snapped to node'
+              : '';
       message = `${formatFeetInches(resized.stair.dimensions.width)} stair width${snapLabel}`;
       persist();
       drawCanvasRefresh();
@@ -1594,7 +1620,7 @@ function finishPointerGesture(svg, event) {
   }
   if (stairSideGesture?.pointerId === event.pointerId) {
     const gesture = stairSideGesture;
-    const finalDocument = documentModel;
+    let finalDocument = documentModel;
     stairSideGesture = null;
     documentModel = gesture.document;
     if (event.type === 'pointercancel' || !gesture.moved) {
@@ -1602,7 +1628,15 @@ function finishPointerGesture(svg, event) {
       persist();
       render();
     } else {
-      message = 'Stair width updated · parallel sides preserved';
+      const finalStair = finalDocument.objects.find((object) => object.type === 'stair' && object.id === gesture.stairId);
+      const hostBoundary = finalStair ? finalDocument.objects.find((object) => object.type === 'deck-boundary' && object.id === finalStair.host.boundaryId) : null;
+      const attachment = finalStair?.sideAttachments?.[gesture.side];
+      const targetBoundary = attachment ? finalDocument.objects.find((object) => object.type === 'deck-boundary' && object.id === attachment.boundaryId) : null;
+      if (finalStair && hostBoundary && targetBoundary) {
+        const connected = materializeStairSideJunction(hostBoundary, targetBoundary, finalStair, gesture.side);
+        finalDocument = upsertObject(upsertObject(finalDocument, markBoundaryEdited(connected.boundary)), connected.stair);
+      }
+      message = attachment ? 'Stair side connected · boundary split into selectable construction segments' : 'Stair width updated · parallel sides preserved';
       commit(finalDocument, 'Resize staircase from side');
     }
     return;
@@ -1689,6 +1723,7 @@ function isVertexReferencedByAttachment(vertexId) {
   const current = boundary();
   const vertexIndex = current?.vertices.findIndex((vertex) => vertex.id === vertexId) ?? -1;
   if (vertexIndex < 0) return false;
+  if (current.vertices[vertexIndex]?.junction) return true;
   const adjacentEdgeIds = new Set([current.edges[vertexIndex]?.id, current.edges[(vertexIndex - 1 + current.edges.length) % current.edges.length]?.id]);
   return documentModel.objects.some((object) => object.type === 'railing-run' && [object.host?.edgeId, object.anchors?.start?.edgeId, object.anchors?.end?.edgeId].some((edgeId) => adjacentEdgeIds.has(edgeId)));
 }
@@ -1760,14 +1795,23 @@ function selectedStairObject() {
 }
 
 function removeSelectedStair() {
-  const stair = selectedStairObject();
+  let stair = selectedStairObject();
   if (!stair) return;
-  const host = boundaryById(stair.host.boundaryId);
-  if (!host) { message = 'Stair host Deck Boundary was not found'; render(); return; }
   try {
+    let next = documentModel;
+    for (const side of ['start', 'end']) {
+      const attachment = stair.sideAttachments?.[side];
+      const target = attachment ? next.objects.find((object) => object.type === 'deck-boundary' && object.id === attachment.boundaryId) : null;
+      if (!target || !attachment?.junction) continue;
+      const disconnected = removeStairSideJunction(target, stair, side);
+      stair = disconnected.stair;
+      next = upsertObject(upsertObject(next, markBoundaryEdited(disconnected.boundary)), stair);
+    }
+    const host = next.objects.find((object) => object.type === 'deck-boundary' && object.id === stair.host.boundaryId);
+    if (!host) { message = 'Stair host Deck Boundary was not found'; render(); return; }
     const restored = markBoundaryEdited(detachStairFromBoundary(host, stair));
     const interfaceId = getStairInterfaceEdge(stair).id;
-    let next = upsertObject(documentModel, restored);
+    next = upsertObject(next, restored);
     next = {
       ...next,
       objects: next.objects.filter((object) => object.id !== stair.id && !(object.type === 'railing-run' && (object.host?.ownerId === stair.id || [object.host?.edgeId, object.anchors?.start?.edgeId, object.anchors?.end?.edgeId].includes(interfaceId)))),
