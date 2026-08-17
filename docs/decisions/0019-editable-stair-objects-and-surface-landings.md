@@ -18,6 +18,8 @@ Connect decks only when the entire lower stair line fits inside a lower Deck Bou
 
 When independently modeled decks have coincident edges, resolve the Stair host before beginning the drag. Among the matching unlocked construction edges under the pointer, choose the surface with the smallest down-level value so the higher deck owns the Stair and the outward drag can enter the lower deck.
 
+Merging a detected lower-deck landing into the live Stair options must preserve the upper host edge identity. Destination geometry may never overwrite the source Construction Edge reference used when the completed Stair is committed.
+
 Established stairs own a centered Dimensions-layer annotation and editable total rise, riser, and tread fields. Editing regenerates the same object and preserves anchor identities. Lateral-line dragging changes width while maintaining parallel sides; either opening side snaps to a host node within six inches. Generated outer Stair nodes are not direct geometry-editing handles.
 
 When a stair side and an adjacent Deck Boundary are collinear, divide the visible line into semantic selection intervals. The overlapping interval selects as the shared Construction Edge; any continuation selects as Stair-only geometry. This applies whether the boundary interval is longer or shorter than total run and avoids duplicate coincident lines.

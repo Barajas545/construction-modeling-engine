@@ -13,7 +13,7 @@ import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
-import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, resolveStairHostEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
+import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, mergeStairBoundaryConnection, resolveStairHostEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -1369,7 +1369,7 @@ function canvasPointerMove(svg, event) {
     const current = boundaryById(stairGesture.boundaryId) ?? boundary();
     let options = deriveStairDragOptions(current, stairGesture.edgeId, raw, stairGesture.width, stairGesture.startOffset);
     const connection = options ? findStairBoundaryConnection(current, stairGesture.edgeId, stairGesture, boundaries(), raw, viewport.width / Math.max(svg.clientWidth, 1) * 20) : null;
-    if (connection) options = { ...options, ...connection, destination: { boundaryId: connection.boundaryId, landing: connection.landing } };
+    options = mergeStairBoundaryConnection(options, connection, stairGesture.edgeId);
     stairDraft = options
       ? { edgeId: stairGesture.edgeId, ...stairGesture, ...options, dragging: true }
       : { edgeId: stairGesture.edgeId, ...stairGesture, totalRise: 0, totalRun: 0, treadDepth: 0, riserCount: 0, treadCount: 0, dragging: true };
@@ -1580,7 +1580,7 @@ function finishPointerGesture(svg, event) {
     }
     try {
       const hostBoundary = boundaryById(gesture.boundaryId ?? options.boundaryId) ?? boundary();
-      const attached = attachStairToBoundary(hostBoundary, options.edgeId, options);
+      const attached = attachStairToBoundary(hostBoundary, gesture.edgeId, { ...options, edgeId: gesture.edgeId });
       let next = upsertObject(documentModel, markBoundaryEdited(attached.boundary));
       next = upsertObject(next, attached.stair);
       selected = { kind: 'stair', id: attached.stair.id };

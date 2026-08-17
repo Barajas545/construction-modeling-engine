@@ -112,6 +112,16 @@ export function resolveStairHostEdge(clickedBoundary, edgeId, candidateBoundarie
   return candidates.sort((a, b) => a.levelDown - b.levelDown || Number(b.clicked) - Number(a.clicked))[0] ?? null;
 }
 
+export function mergeStairBoundaryConnection(options, connection, hostEdgeId) {
+  if (!connection) return options;
+  return {
+    ...options,
+    ...connection,
+    edgeId: hostEdgeId,
+    destination: { boundaryId: connection.boundaryId, landing: connection.landing },
+  };
+}
+
 export function deriveStairDragOptions(boundary, edgeId, pointer, width = 36, startOffset = null) {
   const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
   if (edgeIndex < 0) return null;

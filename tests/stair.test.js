@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDeckBoundary, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
-import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, resolveStairHostEdge, setStairSidePosition, setStairWidth, solveStairLayout, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../src/tools/stairs/stair.js';
+import { attachStairToBoundary, calculateStairDragLayout, calculateStairLayout, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, mergeStairBoundaryConnection, resolveStairHostEdge, setStairSidePosition, setStairWidth, solveStairLayout, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../src/tools/stairs/stair.js';
 
 function ids() { let count = 0; return (prefix) => `${prefix}-${++count}`; }
 
@@ -75,11 +75,17 @@ test('a shared edge automatically chooses the upper deck as the stair host', () 
   const opening = deriveStairOpeningSnap(host.boundary, host.edgeId, pointer, 36);
   const freeLayout = deriveStairDragOptions(host.boundary, host.edgeId, { x: 60, y: 150 }, opening.width, opening.startOffset);
   const connection = findStairBoundaryConnection(host.boundary, host.edgeId, opening, [upper, lower], { x: 60, y: 150 });
+  const connectedOptions = mergeStairBoundaryConnection(freeLayout, connection, host.edgeId);
   assert.ok(freeLayout.totalRise > 0);
   assert.equal(connection.boundaryId, lower.id);
   assert.equal(connection.totalRise, 24);
   assert.equal(connection.riserCount, 4);
   assert.equal(connection.treadCount, 3);
+  assert.equal(connectedOptions.edgeId, host.edgeId);
+  assert.equal(connectedOptions.destination.boundaryId, lower.id);
+  const attached = attachStairToBoundary(host.boundary, connectedOptions.edgeId, { ...opening, ...connectedOptions }, makeId);
+  assert.equal(attached.stair.host.sourceEdgeId, host.edgeId);
+  assert.equal(attached.stair.destination.boundaryId, lower.id);
 });
 
 test('stair sides snap simply to adjacent boundary nodes', () => {
