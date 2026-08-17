@@ -545,8 +545,14 @@ function drawCanvas(svg, current, validation) {
     boundaries().forEach((deck) => {
       const visibleBoundary = chamferDraft?.boundary?.id === deck.id ? chamferDraft.boundary : deck;
       renderBoundarySvg(svg, visibleBoundary, validateDeckBoundary(visibleBoundary));
-      renderStairGraphics(svg, visibleBoundary);
       renderLevelDownGraphics(svg, visibleBoundary);
+    });
+    // Construction objects must remain above every deck surface. Rendering a
+    // lower deck after its host stair would otherwise cover the completed stair
+    // even though the object was successfully stored in the project model.
+    boundaries().forEach((deck) => {
+      const visibleBoundary = chamferDraft?.boundary?.id === deck.id ? chamferDraft.boundary : deck;
+      renderStairGraphics(svg, visibleBoundary);
     });
     if (chamferDraft) renderChamferDimension(svg, chamferDraft);
     renderStairPreview(svg, current);
