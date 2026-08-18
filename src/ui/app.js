@@ -1635,12 +1635,12 @@ function placeCatPoint(raw, pointerType = 'mouse', pointerEvent = null, targetCa
     return;
   }
   if (catTool === 'note') {
-    const text = window.prompt('Construction note for the estimator:', '');
-    if (text === null) { message = 'CAT Note canceled'; updateStatusMessage(); return; }
-    const note = createCatNote(raw, text);
+    const note = createCatNote(raw, '');
+    mode = 'select';
     selected = { kind: 'cat', id: note.id };
-    message = 'CAT Note added · drag its label to reposition it';
+    message = 'Arrow point placed · write the note in Object properties';
     commit(upsertObject(documentModel, note), 'Add CAT construction note');
+    requestAnimationFrame(() => app.querySelector('#cat-note-text')?.focus());
     return;
   }
   const snapped = snapForPointer(raw, catDraft?.start ?? null, [], new Set(), pointerType);

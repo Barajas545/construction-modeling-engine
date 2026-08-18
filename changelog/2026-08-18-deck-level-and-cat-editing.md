@@ -10,6 +10,6 @@ CAT CL now includes:
 
 - **Trim** — touch the side of a CAT Line to remove it at the nearest crossing with another CAT Line or Deck Boundary edge.
 - **Extend** — touch near a CAT Line endpoint to extend it to the first crossing beyond that endpoint.
-- **Note** — choose an arrow point, enter estimator text, then drag the numbered note label independently. Selected Note properties support text editing and an optional voice recording of up to 30 seconds.
+- **Note** — choose an arrow point and see it placed immediately; Object properties then opens for estimator text without a blocking browser prompt. Drag the numbered note label independently. Selected Note properties support text editing and an optional voice recording of up to 30 seconds.
 
 CAT notes remain secondary annotations. Their arrow point stays fixed when the label moves, and they hide with the CAT Dimensions layer rather than altering Deck Boundary geometry.
