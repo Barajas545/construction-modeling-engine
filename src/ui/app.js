@@ -4,6 +4,7 @@ import { getBoundaryLevelDown, getDeckBoundaries, getProjectSurfaceArea, setBoun
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
 import { getDimensionLayer, getDimensionLeaderOffset, getDimensionOffset, isDimensionReferenceVisible, setDimensionLayerVisibility, setDimensionLeaderOffset, setDimensionOffset, setDimensionReferenceVisibility } from '../core/annotations/dimension-layer.js';
 import { getDeckingLayer, setDeckingLayerVisibility } from '../core/annotations/decking-layer.js';
+import { getGridLayer, setGridLayerVisibility } from '../core/annotations/grid-layer.js';
 import { getRailingLayer, setRailingLayerVisibility, setRailingSnapSettings } from '../core/annotations/railing-layer.js';
 import { collectSnapTargets, resolveSnap } from '../core/geometry/snap-engine.js';
 import { nearestPointOnSegment } from '../core/geometry/vector.js';
@@ -40,7 +41,6 @@ let snapState = { type: 'grid', label: 'Grid', guides: [] };
 let numericBuffer = '';
 let lastLength = null;
 let gridSetting = 'auto';
-let gridVisible = true;
 let viewportAnimation = 0;
 const activeTouches = new Map();
 let touchGesture = null;
@@ -279,16 +279,12 @@ function renderProgress(progress, current) {
   return `<section class="inspector-section progress-section"><div class="eyebrow">Progressive model</div><div class="progress-heading"><h2>${progress.stage.label}</h2><span class="level-badge">Level ${documentModel.workflow?.detailLevel ?? 1}</span></div><p class="section-copy">${progress.stage.description}</p><div class="maturity-track">${progress.milestones.map((milestone) => `<div class="maturity-step ${milestone.state}"><span></span><small>${milestone.label}</small></div>`).join('')}</div>${established && !atFinalStage ? `<button class="button progress-action" data-action="advance-stage">Continue to ${progress.nextStage.label.toLowerCase()}</button>` : ''}<div class="continuity-note">Same project · no redraw required</div></section>`;
 }
 
-function renderGridControls() {
-  const dimensionsVisible = getDimensionLayer(documentModel).visible;
-  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Annotation layers can be hidden without changing the construction model.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label></section><section class="inspector-section"><div class="eyebrow">Workspace</div><h2>Construction grid</h2><p class="section-copy">Grid density adapts as you navigate. Choose a fixed field increment when needed.</p><div class="field-grid"><div class="field full"><label for="grid-spacing">Snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><label class="toggle-row"><input id="grid-visible" type="checkbox" ${gridVisible ? 'checked' : ''}><span>Show construction grid</span></label><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
-}
-
 function renderLayerAndSnapControls() {
   const dimensionsVisible = getDimensionLayer(documentModel).visible;
   const railingLayer = getRailingLayer(documentModel);
   const deckingLayer = getDeckingLayer(documentModel);
-  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label></section><section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Construction geometry takes priority over the grid. Disable either source when a different placement is needed.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${railingLayer.snap.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${railingLayer.snap.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><label class="toggle-row"><input id="grid-visible" type="checkbox" ${gridVisible ? 'checked' : ''}><span>Show construction grid</span></label><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
+  const gridLayer = getGridLayer(documentModel);
+  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill and board pattern</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${gridLayer.visible ? '◉' : '○'}</span><span><strong>Construction grid</strong><small>Visual guide · snap remains independent</small></span><input id="grid-visible" type="checkbox" ${gridLayer.visible ? 'checked' : ''}></label></section><section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Construction geometry takes priority over the grid. Disable either source when a different placement is needed.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${railingLayer.snap.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${railingLayer.snap.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
 }
 
 function renderInspector(current, validation) {
@@ -577,7 +573,7 @@ function drawCanvas(svg, current, validation) {
   const major = svgElement('pattern', { id: 'majorGrid', width: majorGrid, height: majorGrid, patternUnits: 'userSpaceOnUse' });
   major.append(svgElement('rect', { width: majorGrid, height: majorGrid, fill: 'url(#minorGrid)' }), svgElement('path', { d: `M ${majorGrid} 0 L 0 0 0 ${majorGrid}`, class: 'grid-major', fill: 'none' }));
   defs.append(minor, major);
-  svg.append(defs, svgElement('rect', { x: viewport.x, y: viewport.y, width: viewport.width, height: viewport.height, fill: gridVisible ? 'url(#majorGrid)' : '#0d1114' }));
+  svg.append(defs, svgElement('rect', { x: viewport.x, y: viewport.y, width: viewport.width, height: viewport.height, fill: getGridLayer(documentModel).visible ? 'url(#majorGrid)' : '#0d1114' }));
   svg.append(svgElement('line', { x1: viewport.x, y1: '0', x2: viewport.x + viewport.width, y2: '0', class: 'axis-line' }), svgElement('line', { x1: '0', y1: viewport.y, x2: '0', y2: viewport.y + viewport.height, class: 'axis-line' }));
   if (current) {
     boundaries().forEach((deck) => {
@@ -1049,7 +1045,10 @@ function bindEvents() {
   const gridSpacing = app.querySelector('#grid-spacing');
   if (gridSpacing) gridSpacing.addEventListener('change', () => { gridSetting = gridSpacing.value; render(); });
   const gridVisibility = app.querySelector('#grid-visible');
-  if (gridVisibility) gridVisibility.addEventListener('change', () => { gridVisible = gridVisibility.checked; render(); });
+  if (gridVisibility) gridVisibility.addEventListener('change', () => {
+    message = `Construction grid layer ${gridVisibility.checked ? 'shown' : 'hidden'}`;
+    commit(setGridLayerVisibility(documentModel, gridVisibility.checked), 'Toggle Construction grid layer');
+  });
   const dimensionVisibility = app.querySelector('#dimensions-visible');
   if (dimensionVisibility) dimensionVisibility.addEventListener('change', () => {
     message = `Dimensions layer ${dimensionVisibility.checked ? 'shown' : 'hidden'}`;
