@@ -71,6 +71,45 @@ button { color: inherit; }
 .export-menu button strong { font-size: 11px; }
 .export-menu button small { color: var(--muted); font-size: 9px; }
 .export-menu button b { border: 1px solid #41505a; border-radius: 5px; padding: 4px 5px; color: var(--accent); font-size: 8px; }
+.takeoff-overlay { position: fixed; z-index: 40; inset: 18px; display: flex; flex-direction: column; overflow: hidden; border: 1px solid #46545d; border-radius: 16px; background: #0c1215; box-shadow: 0 30px 100px rgb(0 0 0 / 72%); }
+.takeoff-header { display: flex; justify-content: space-between; gap: 18px; align-items: flex-start; border-bottom: 1px solid #29343a; padding: 22px 26px 18px; background: linear-gradient(120deg, rgb(84 214 199 / 8%), transparent 52%); }
+.takeoff-header h1 { margin: 4px 0; font-size: 25px; }
+.takeoff-header p { margin: 0; color: var(--muted); font-size: 11px; }
+.takeoff-close { width: 38px; height: 38px; border: 1px solid #3b4850; border-radius: 9px; background: #11191d; color: var(--text); font-size: 22px; cursor: pointer; }
+.takeoff-summary { display: flex; gap: 10px; padding: 13px 26px; border-bottom: 1px solid #29343a; }
+.takeoff-summary span { min-width: 120px; display: grid; gap: 3px; border-right: 1px solid #2e3940; padding-right: 18px; }
+.takeoff-summary small, .takeoff-subtotal span { color: var(--muted); font-size: 8px; text-transform: uppercase; letter-spacing: .06em; }
+.takeoff-summary strong { font-size: 16px; }
+.takeoff-actions { display: flex; flex-wrap: wrap; gap: 8px; padding: 12px 26px; border-bottom: 1px solid #29343a; }
+.takeoff-list { flex: 1; overflow: auto; padding: 12px 26px 24px; }
+.takeoff-category { margin-bottom: 8px; overflow: hidden; border: 1px solid #2b373d; border-radius: 10px; background: #0e1519; }
+.takeoff-category-heading { width: 100%; display: flex; justify-content: space-between; align-items: center; border: 0; background: transparent; padding: 13px 15px; color: var(--text); cursor: pointer; }
+.takeoff-category-heading > span { display: flex; align-items: center; gap: 11px; }
+.takeoff-category-heading b { width: 19px; color: var(--accent); font-size: 17px; text-align: center; }
+.takeoff-category-heading strong { font-size: 13px; }
+.takeoff-category-heading small { color: var(--muted); font-size: 9px; }
+.takeoff-category.expanded .takeoff-category-heading { border-bottom: 1px solid #263138; background: rgb(84 214 199 / 3%); }
+.takeoff-category-body { padding: 7px; }
+.takeoff-line { display: grid; grid-template-columns: minmax(240px, 1fr) 82px 112px 95px 70px; gap: 9px; align-items: center; min-height: 64px; border-bottom: 1px solid #202a2f; padding: 8px; }
+.takeoff-line:last-of-type { border-bottom: 0; }
+.takeoff-material { display: grid; grid-template-columns: auto 1fr; gap: 3px 8px; align-items: center; }
+.takeoff-material strong { font-size: 11px; }
+.takeoff-material small { grid-column: 2; color: var(--muted); font-size: 8px; }
+.takeoff-origin { grid-row: 1 / span 3; align-self: start; margin-top: 1px; border: 1px solid #3b4850; border-radius: 4px; padding: 3px 4px; color: #9eafb6; font-size: 7px; letter-spacing: .06em; }
+.takeoff-origin.adjusted { border-color: var(--accent); color: var(--accent); }
+.takeoff-origin.manual { border-color: var(--cyan); color: var(--cyan); }
+.takeoff-line label, .takeoff-add-form label { display: grid; gap: 4px; color: var(--muted); font-size: 8px; }
+.takeoff-line input, .takeoff-add-form input, .takeoff-add-form select { width: 100%; min-width: 0; border: 1px solid #354249; border-radius: 6px; background: #0a0f12; padding: 8px; color: var(--text); font: inherit; }
+.takeoff-subtotal { display: grid; gap: 5px; }
+.takeoff-subtotal strong { font-size: 11px; }
+.takeoff-line-actions { display: flex; justify-content: flex-end; }
+.takeoff-line-actions .button { min-height: 32px; padding: 6px 8px; font-size: 8px; }
+.takeoff-empty { padding: 15px; color: var(--muted); font-size: 10px; text-align: center; }
+.takeoff-add { margin: 8px; }
+.takeoff-add-form { display: grid; grid-template-columns: minmax(180px, 1.5fr) minmax(150px, 1fr) 90px 100px 110px; gap: 9px; align-items: end; border-top: 1px solid #2a353b; margin-top: 7px; padding: 12px 8px 7px; }
+.takeoff-add-actions { display: flex; gap: 6px; grid-column: 1 / -1; }
+.takeoff-footer { display: flex; justify-content: space-between; gap: 18px; border-top: 1px solid #29343a; padding: 12px 26px; color: var(--muted); font-size: 9px; }
+.takeoff-footer strong { color: var(--text); }
 .print-title-block { display: none; }
 
 .workspace-shell { min-height: 0; display: grid; grid-template-columns: 68px minmax(0, 1fr) 300px; }
@@ -406,6 +445,14 @@ button { color: inherit; }
   .export-menu { width: min(300px, calc(100vw - 16px)); }
   .cat-toolbar { left: 8px; right: 8px; max-width: none; transform: none; }
   .cat-toolbar-title { min-width: 82px; }
+  .takeoff-overlay { inset: 6px; border-radius: 12px; }
+  .takeoff-header { padding: 16px; }
+  .takeoff-summary, .takeoff-actions, .takeoff-list, .takeoff-footer { padding-left: 12px; padding-right: 12px; }
+  .takeoff-summary span { min-width: 82px; }
+  .takeoff-line { grid-template-columns: minmax(170px, 1fr) 68px 88px; }
+  .takeoff-subtotal { display: none; }
+  .takeoff-line-actions { grid-column: 3; }
+  .takeoff-add-form { grid-template-columns: 1fr 1fr; }
 }
 
 @media (pointer: coarse) {
@@ -445,4 +492,14 @@ button { color: inherit; }
   .cat-line, .cat-measure-leg, .cat-measure-direct { stroke: #8f7712; }
   .cat-measure-bg { fill: #fff; stroke: #8f7712; }
   .cat-measure-text { fill: #594a0c; }
+  body.print-takeoff .topbar, body.print-takeoff .workspace-shell { display: none !important; }
+  body.print-takeoff .takeoff-overlay { position: static; display: block; border: 0; box-shadow: none; background: #fff; color: #111; }
+  body.print-takeoff .takeoff-close, body.print-takeoff .takeoff-actions, body.print-takeoff .takeoff-add, body.print-takeoff .takeoff-add-form, body.print-takeoff .takeoff-line-actions { display: none !important; }
+  body.print-takeoff .takeoff-header, body.print-takeoff .takeoff-summary, body.print-takeoff .takeoff-footer, body.print-takeoff .takeoff-category { border-color: #9aa4a9; background: #fff; color: #111; }
+  body.print-takeoff .takeoff-list { overflow: visible; padding: 10px 0; }
+  body.print-takeoff .takeoff-category:not(.expanded) { display: none; }
+  body.print-takeoff .takeoff-category-heading, body.print-takeoff .takeoff-line { color: #111; }
+  body.print-takeoff .takeoff-line input { border: 0; background: transparent; color: #111; padding: 0; }
+  body.print-takeoff.takeoff-no-prices .takeoff-price, body.print-takeoff.takeoff-no-prices .takeoff-subtotal { display: none !important; }
+  body.print-takeoff.takeoff-no-prices .takeoff-line { grid-template-columns: minmax(300px, 1fr) 90px; }
 }

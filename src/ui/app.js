@@ -24,6 +24,7 @@ import { CAT_LINE_TYPE, CAT_MEASUREMENT_TYPE, CAT_NOTE_TYPE, createCatLine, crea
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, materializeStairSideJunction, mergeStairBoundaryConnection, removeStairSideJunction, resolveStairHostEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
+import { TAKEOFF_CATEGORIES, addManualTakeoffLine, createTakeoffExport, getEffectiveTakeoffLines, removeManualTakeoffLine, resetTakeoffLine, updateTakeoffLine } from '../tools/takeoff/takeoff.js';
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'cme.project.v1';
@@ -83,6 +84,9 @@ let catSnapState = { type: 'none', label: 'Free', guides: [] };
 let catNoteDragStart = null;
 let catAudioRecorder = null;
 let catAudioChunks = [];
+let takeoffOpen = false;
+let takeoffExpanded = new Set(['decking', 'railing']);
+let takeoffAddCategory = null;
 
 function loadProjectLibrary() {
   const savedLibrary = localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
@@ -180,6 +184,7 @@ function render() {
         <div class="project-summary" aria-label="Project totals"><div class="top-metric"><span>Project surface</span><strong>${formatSquareFeet(projectSurface)}</strong></div><div class="top-metric"><span>Deck areas</span><strong>${deckAreaCount}</strong></div></div>
         <div class="top-actions"><button class="button primary save-step-one" data-action="save-step-one">Save to Step 1</button><div class="export-control"><button class="button ghost export-toggle ${exportMenuOpen ? 'active-constraint' : ''}" data-action="toggle-export-menu" aria-expanded="${exportMenuOpen}"><span class="export-long">Export options</span><span class="export-short">Export</span> ⌄</button>${renderExportMenu()}</div></div>
       </header>
+      ${renderTakeoffWorkspace()}
       <section class="workspace-shell">
         <nav class="toolrail" aria-label="Modeling tools">
           <button class="tool-button ${mode === 'select' ? 'active' : ''}" data-mode="select" title="Select and edit"><span class="tool-icon">↖</span><span class="tool-label">Select</span></button>
@@ -232,7 +237,35 @@ function renderProjectMenu() {
 
 function renderExportMenu() {
   if (!exportMenuOpen) return '';
-  return `<section class="export-menu" role="menu"><button data-action="export-pdf"><span><strong>Export PDF</strong><small>Professional visual sketch and field quantities</small></span><b>PDF</b></button><button data-action="download-step-one-json"><span><strong>Download Step 1 JSON</strong><small>Portable fallback for DCR Sales Hub</small></span><b>JSON</b></button></section>`;
+  return `<section class="export-menu" role="menu"><button data-action="open-takeoff"><span><strong>Takeoff</strong><small>Editable materials, pricing, and supplier quote</small></span><b>NEW</b></button><button data-action="export-pdf"><span><strong>Export PDF</strong><small>Professional visual sketch and field quantities</small></span><b>PDF</b></button><button data-action="download-step-one-json"><span><strong>Download Step 1 JSON</strong><small>Portable fallback for DCR Sales Hub</small></span><b>JSON</b></button></section>`;
+}
+
+function takeoffContext() {
+  const railingGeometries = getAllRailingGeometries();
+  const railing = analyzeRailingGeometries(railingGeometries);
+  return { railingGeometries, railingPostCount: railing.estimatedPostCount };
+}
+
+function renderTakeoffLine(line) {
+  const sourceLabel = line.origin === 'adjusted' ? 'ADJUSTED' : line.origin === 'manual' ? 'MANUAL' : 'AUTO';
+  const price = line.unitPrice == null ? '' : line.unitPrice;
+  const subtotal = line.unitPrice == null ? '—' : `$${(line.quantity * line.unitPrice).toFixed(2)}`;
+  const calculation = line.calculatedQuantity == null ? '' : `<small>Calculated ${line.calculatedQuantity}${line.requiredLinearFeet ? ` · ${line.requiredLinearFeet} LF net` : ''}${line.confidence !== 'calculated' ? ' · REVIEW' : ''}</small>`;
+  return `<div class="takeoff-line"><div class="takeoff-material"><span class="takeoff-origin ${line.origin}">${sourceLabel}</span><strong>${escapeHtml(line.description)}</strong><small>${escapeHtml(line.specification ?? '')}</small>${calculation}</div><label><span>Qty</span><input type="number" min="0" step="1" value="${line.quantity}" data-takeoff-quantity="${escapeHtml(line.id)}"></label><label class="takeoff-price"><span>Unit price</span><input type="number" min="0" step="0.01" placeholder="—" value="${price}" data-takeoff-price="${escapeHtml(line.id)}"></label><div class="takeoff-subtotal"><span>Subtotal</span><strong>${subtotal}</strong></div><div class="takeoff-line-actions">${line.origin === 'manual' ? `<button class="icon-button danger" data-action="delete-takeoff-line" data-line-id="${escapeHtml(line.id)}" aria-label="Delete material">×</button>` : line.origin === 'adjusted' ? `<button class="button ghost" data-action="reset-takeoff-line" data-line-id="${escapeHtml(line.id)}">Reset</button>` : ''}</div></div>`;
+}
+
+function renderTakeoffWorkspace() {
+  if (!takeoffOpen) return '';
+  const lines = getEffectiveTakeoffLines(documentModel, takeoffContext());
+  const knownTotal = lines.reduce((sum, line) => sum + (line.unitPrice == null ? 0 : line.quantity * line.unitPrice), 0);
+  const unpriced = lines.filter((line) => line.unitPrice == null).length;
+  const categories = TAKEOFF_CATEGORIES.map((category) => {
+    const categoryLines = lines.filter((line) => line.category === category.id);
+    const expanded = takeoffExpanded.has(category.id);
+    const adding = takeoffAddCategory === category.id;
+    return `<section class="takeoff-category ${expanded ? 'expanded' : ''}"><button class="takeoff-category-heading" data-action="toggle-takeoff-category" data-category="${category.id}" aria-expanded="${expanded}"><span><b>${expanded ? '−' : '+'}</b><strong>${category.label}</strong></span><small>${categoryLines.length} material${categoryLines.length === 1 ? '' : 's'}</small></button>${expanded ? `<div class="takeoff-category-body">${categoryLines.length ? categoryLines.map(renderTakeoffLine).join('') : '<div class="takeoff-empty">No calculated materials yet. Add a project material or keep modeling.</div>'}${adding ? `<div class="takeoff-add-form"><label><span>Material</span><input id="takeoff-new-description" placeholder="Example: Pressure treated joist"></label><label><span>Specification</span><input id="takeoff-new-specification" placeholder="Example: 2×8×16"></label><label><span>Quantity</span><input id="takeoff-new-quantity" type="number" min=".01" step="1" value="1"></label><label><span>Unit</span><select id="takeoff-new-unit"><option value="ea">pieces</option><option value="lf">LF</option><option value="sf">SF</option><option value="box">boxes</option><option value="bag">bags</option><option value="gal">gallons</option></select></label><label><span>Unit price · optional</span><input id="takeoff-new-price" type="number" min="0" step=".01" placeholder="—"></label><div class="takeoff-add-actions"><button class="button primary" data-action="save-takeoff-line" data-category="${category.id}">Add material</button><button class="button ghost" data-action="cancel-takeoff-line">Cancel</button></div></div>` : `<button class="button ghost takeoff-add" data-action="add-takeoff-line" data-category="${category.id}">+ Add material</button>`}</div>` : ''}</section>`;
+  }).join('');
+  return `<section class="takeoff-overlay" role="dialog" aria-modal="true" aria-label="Project material takeoff"><header class="takeoff-header"><div><div class="eyebrow">CME material intelligence</div><h1>Project Takeoff</h1><p>${escapeHtml(documentModel.name)} · calculated from the current construction model</p></div><button class="takeoff-close" data-action="close-takeoff" aria-label="Close takeoff">×</button></header><div class="takeoff-summary"><span><small>Material lines</small><strong>${lines.length}</strong></span><span><small>Unpriced</small><strong>${unpriced}</strong></span><span class="takeoff-price"><small>Known material total</small><strong>$${knownTotal.toFixed(2)}</strong></span></div><div class="takeoff-actions"><button class="button primary" data-action="print-takeoff-quote">Export quote · no prices</button><button class="button" data-action="print-takeoff-priced">Export with prices</button><button class="button ghost" data-action="download-takeoff-json">Takeoff JSON</button></div><div class="takeoff-list">${categories}</div><footer class="takeoff-footer"><span>Quantities marked REVIEW are preliminary construction recipes and remain editable.</span><strong>${lines.filter((line) => line.origin === 'adjusted').length} adjusted · ${lines.filter((line) => line.origin === 'manual').length} manual</strong></footer></section>`;
 }
 
 function renderContextPanel(current) {
@@ -1216,6 +1249,18 @@ function renderNodeInferenceGuide(svg, inference, snappedPoint, markerSize) {
 function bindEvents() {
   app.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
   app.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button.dataset.action, button)));
+  app.querySelectorAll('[data-takeoff-quantity]').forEach((input) => input.addEventListener('change', () => {
+    const quantity = Number(input.value);
+    if (!Number.isFinite(quantity) || quantity < 0) { message = 'Enter a valid material quantity'; render(); return; }
+    message = 'Takeoff quantity adjusted';
+    commit(updateTakeoffLine(documentModel, input.dataset.takeoffQuantity, { quantity }), 'Adjust takeoff material quantity');
+  }));
+  app.querySelectorAll('[data-takeoff-price]').forEach((input) => input.addEventListener('change', () => {
+    const unitPrice = input.value === '' ? null : Number(input.value);
+    if (unitPrice !== null && (!Number.isFinite(unitPrice) || unitPrice < 0)) { message = 'Enter a valid unit price'; render(); return; }
+    message = unitPrice === null ? 'Material price cleared' : 'Material price updated';
+    commit(updateTakeoffLine(documentModel, input.dataset.takeoffPrice, { unitPrice }), 'Update takeoff material price');
+  }));
   const projectNameInput = app.querySelector('#project-name-input');
   if (projectNameInput) projectNameInput.addEventListener('keydown', (event) => {
     if (event.key === 'Enter') { event.preventDefault(); handleAction('rename-project'); }
@@ -2481,6 +2526,37 @@ function handleAction(action, source = null) {
   if (action === 'toggle-project-menu') { projectMenuOpen = !projectMenuOpen; exportMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
   if (action === 'close-project-menu') { projectMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
   if (action === 'toggle-export-menu') { exportMenuOpen = !exportMenuOpen; projectMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
+  if (action === 'open-takeoff') { takeoffOpen = true; exportMenuOpen = false; projectMenuOpen = false; takeoffAddCategory = null; message = 'Editable project takeoff generated'; render(); return; }
+  if (action === 'close-takeoff') { takeoffOpen = false; takeoffAddCategory = null; message = 'Takeoff saved with this project'; render(); return; }
+  if (action === 'toggle-takeoff-category') {
+    const category = source?.dataset.category;
+    if (!category) return;
+    if (takeoffExpanded.has(category)) takeoffExpanded.delete(category); else takeoffExpanded.add(category);
+    render(); return;
+  }
+  if (action === 'add-takeoff-line') { takeoffAddCategory = source?.dataset.category ?? 'custom'; takeoffExpanded.add(takeoffAddCategory); render(); requestAnimationFrame(() => app.querySelector('#takeoff-new-description')?.focus()); return; }
+  if (action === 'cancel-takeoff-line') { takeoffAddCategory = null; render(); return; }
+  if (action === 'save-takeoff-line') {
+    try {
+      const next = addManualTakeoffLine(documentModel, {
+        category: source?.dataset.category,
+        description: app.querySelector('#takeoff-new-description')?.value,
+        specification: app.querySelector('#takeoff-new-specification')?.value,
+        quantity: app.querySelector('#takeoff-new-quantity')?.value,
+        unit: app.querySelector('#takeoff-new-unit')?.value,
+        unitPrice: app.querySelector('#takeoff-new-price')?.value,
+      });
+      takeoffAddCategory = null;
+      message = 'Manual material added to Takeoff';
+      commit(next, 'Add manual takeoff material');
+    } catch (error) { message = error.message; render(); }
+    return;
+  }
+  if (action === 'delete-takeoff-line') { message = 'Manual material removed'; commit(removeManualTakeoffLine(documentModel, source?.dataset.lineId), 'Remove manual takeoff material'); return; }
+  if (action === 'reset-takeoff-line') { message = 'Calculated material quantity restored'; commit(resetTakeoffLine(documentModel, source?.dataset.lineId), 'Reset takeoff material calculation'); return; }
+  if (action === 'download-takeoff-json') { downloadJson(createTakeoffExport(documentModel, { ...takeoffContext(), includePrices: true }), 'takeoff'); message = 'Editable Takeoff JSON downloaded'; render(); return; }
+  if (action === 'print-takeoff-quote') { printTakeoff(false); return; }
+  if (action === 'print-takeoff-priced') { printTakeoff(true); return; }
   if (action === 'rename-project') {
     const name = app.querySelector('#project-name-input')?.value.trim();
     if (!name) { message = 'Enter a project name'; render(); return; }
@@ -2952,6 +3028,8 @@ function resetProjectWorkspaceState() {
   catSnapState = { type: 'none', label: 'Free', guides: [] };
   utilityPanel = null;
   exportMenuOpen = false;
+  takeoffOpen = false;
+  takeoffAddCategory = null;
   pendingDeckDeleteId = null;
   viewport = createViewport();
 }
@@ -3007,6 +3085,17 @@ function exportProjectPdf() {
   window.setTimeout(() => window.print(), 80);
   render();
 }
+
+function printTakeoff(includePrices) {
+  takeoffExpanded = new Set(TAKEOFF_CATEGORIES.map((category) => category.id));
+  render();
+  document.body.classList.add('print-takeoff');
+  document.body.classList.toggle('takeoff-no-prices', !includePrices);
+  message = includePrices ? 'Priced Takeoff ready for PDF' : 'Supplier quote ready without prices';
+  window.setTimeout(() => window.print(), 80);
+}
+
+window.addEventListener('afterprint', () => document.body.classList.remove('print-takeoff', 'takeoff-no-prices'));
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#039;', '"': '&quot;' })[character]);
@@ -3179,6 +3268,14 @@ window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   const editingField = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
   const numericLineMode = mode === 'draw' || (mode === 'cat' && catTool === 'line' && Boolean(catDraft?.start));
+  if (event.key === 'Escape' && takeoffOpen) {
+    event.preventDefault();
+    takeoffOpen = false;
+    takeoffAddCategory = null;
+    message = 'Takeoff saved with this project';
+    render();
+    return;
+  }
   if (event.key === 'Escape' && (projectMenuOpen || exportMenuOpen)) {
     event.preventDefault();
     projectMenuOpen = false;
