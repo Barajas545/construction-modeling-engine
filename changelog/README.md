@@ -13,3 +13,4 @@ Release notes and milestone summaries belong here. Entries should describe user-
 - [Project workflow and DCR Sales Hub foundation](./2026-08-18-project-workflow-sales-hub-foundation.md) — Implemented.
 - [Canvas layer toolbar simplified](./2026-08-18-canvas-layer-toolbar.md) — Implemented.
 - [CAT CL foundation](./2026-08-18-cat-cl-foundation.md) — Implemented.
+- [Deck levels and CAT editing](./2026-08-18-deck-level-and-cat-editing.md) — Implemented.

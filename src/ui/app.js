@@ -20,7 +20,7 @@ import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomView
 import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { deleteDeckAssembly } from '../tools/deck-boundary/delete-deck-assembly.js';
 import { clearDeckBoardingDirection, deriveDeckBoardingSegments, getDeckBoarding, rotateDeckBoardingDirection, setDeckBoardingDirection } from '../tools/deck-boarding/deck-boarding.js';
-import { CAT_LINE_TYPE, CAT_MEASUREMENT_TYPE, createCatLine, createCatMeasurement, deriveCatMeasurement, getCatLines, getCatMeasurements, getCatSnapObjects, resolveCatLineEndpoint } from '../tools/cat-cl/cat-cl.js';
+import { CAT_LINE_TYPE, CAT_MEASUREMENT_TYPE, CAT_NOTE_TYPE, createCatLine, createCatMeasurement, createCatNote, deriveCatMeasurement, extendCatLine, getCatLines, getCatMeasurements, getCatNotes, getCatSnapObjects, resolveCatLineEndpoint, trimCatLine, updateCatNote } from '../tools/cat-cl/cat-cl.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, materializeStairSideJunction, mergeStairBoundaryConnection, removeStairSideJunction, resolveStairHostEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
@@ -80,6 +80,9 @@ let catTool = 'line';
 let catDraft = null;
 let catPointer = null;
 let catSnapState = { type: 'none', label: 'Free', guides: [] };
+let catNoteDragStart = null;
+let catAudioRecorder = null;
+let catAudioChunks = [];
 
 function loadProjectLibrary() {
   const savedLibrary = localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
@@ -235,11 +238,13 @@ function renderExportMenu() {
 function renderContextPanel(current) {
   if (!selected.kind) return '';
   if (selected.kind === 'cat') {
-    const object = documentModel.objects.find((entry) => entry.id === selected.id && [CAT_LINE_TYPE, CAT_MEASUREMENT_TYPE].includes(entry.type));
+    const object = documentModel.objects.find((entry) => entry.id === selected.id && [CAT_LINE_TYPE, CAT_MEASUREMENT_TYPE, CAT_NOTE_TYPE].includes(entry.type));
     if (!object) return '';
     const measurement = object.type === CAT_MEASUREMENT_TYPE ? deriveCatMeasurement(object) : null;
-    const title = measurement ? formatFeetInches(measurement.pointToPointDistance) : formatFeetInches(Math.hypot(object.vertices[1].x - object.vertices[0].x, object.vertices[1].y - object.vertices[0].y));
-    return `<section class="context-object-panel cat-context"><div class="context-heading"><div><div class="eyebrow">${measurement ? 'CAT measuring tape' : 'CAT construction line'}</div><h2>${title}</h2></div><button class="context-close" data-action="clear-selection" aria-label="Close object options">×</button></div>${measurement ? `<div class="cat-measure-summary"><span><small>Horizontal</small><strong>${formatFeetInches(measurement.horizontalDistance)}</strong></span><span><small>Vertical</small><strong>${formatFeetInches(measurement.verticalDistance)}</strong></span><span><small>Point to point</small><strong>${formatFeetInches(measurement.pointToPointDistance)}</strong></span></div>` : '<div class="context-note">CAT reference geometry remains separate from authoritative construction objects and is available to Boundary snap.</div>'}<div class="context-actions"><button class="button" data-action="toggle-cat-construction-lines">${getCatConstructionLayer(documentModel).visible ? 'Hide CAT CL' : 'Show CAT CL'}</button><button class="button danger" data-action="delete-cat-object">Delete</button></div></section>`;
+    const note = object.type === CAT_NOTE_TYPE ? object : null;
+    const title = note ? catNoteLabel(note) : measurement ? formatFeetInches(measurement.pointToPointDistance) : formatFeetInches(Math.hypot(object.vertices[1].x - object.vertices[0].x, object.vertices[1].y - object.vertices[0].y));
+    const annotation = Boolean(note || measurement);
+    return `<section class="context-object-panel cat-context"><div class="context-heading"><div><div class="eyebrow">${note ? 'CAT construction note' : measurement ? 'CAT measuring tape' : 'CAT construction line'}</div><h2>${title}</h2></div><button class="context-close" data-action="clear-selection" aria-label="Close object options">×</button></div>${note ? `<label class="context-select"><span>Estimator note</span><textarea id="cat-note-text" rows="4" maxlength="1000">${escapeHtml(note.text)}</textarea></label><button class="button primary context-full" data-action="apply-cat-note">Save note</button><div class="context-actions"><button class="button ${catAudioRecorder ? 'active-constraint' : ''}" data-action="${catAudioRecorder ? 'stop-cat-note-audio' : 'record-cat-note-audio'}">${catAudioRecorder ? '■ Stop recording' : '● Record voice'}</button><button class="button" data-action="remove-cat-note-audio" ${note.audioDataUrl ? '' : 'disabled'}>Delete audio</button></div>${note.audioDataUrl ? `<audio class="cat-note-audio" controls src="${note.audioDataUrl}"></audio>` : '<div class="context-note">Optional voice note · recording stops automatically after 30 seconds.</div>'}` : measurement ? `<div class="cat-measure-summary"><span><small>Horizontal</small><strong>${formatFeetInches(measurement.horizontalDistance)}</strong></span><span><small>Vertical</small><strong>${formatFeetInches(measurement.verticalDistance)}</strong></span><span><small>Point to point</small><strong>${formatFeetInches(measurement.pointToPointDistance)}</strong></span></div>` : '<div class="context-note">CAT reference geometry remains separate from authoritative construction objects and is available to Boundary snap.</div>'}<div class="context-actions"><button class="button" data-action="${annotation ? 'toggle-cat-dimensions' : 'toggle-cat-construction-lines'}">${annotation ? getCatDimensionLayer(documentModel).visible ? 'Hide CAT annotations' : 'Show CAT annotations' : getCatConstructionLayer(documentModel).visible ? 'Hide CAT CL' : 'Show CAT CL'}</button><button class="button danger" data-action="delete-cat-object">Delete</button></div></section>`;
   }
   if (!current) return '';
   const deckingVisible = getDeckingLayer(documentModel).visible;
@@ -295,7 +300,7 @@ function renderContextPanel(current) {
       const assemblyLocked = localBoundary.vertices.some((vertex) => vertex.locked) || localBoundary.edges.some((edge) => edge.properties?.custom?.locked);
       const deleting = pendingDeckDeleteId === localBoundary.id;
       const boardingActive = boardingDirectionMode?.boundaryId === localBoundary.id;
-      return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(localBoundary.computed.areaSquareInches)}</h2></div>${close}</div><label class="context-select"><span>Down level · local deck</span><div class="compound-field"><input id="boundary-level-down" value="${formatInches(levelDown)}"><button class="button" data-action="apply-boundary-level">Apply</button></div></label><div class="context-actions"><button class="button primary ${moveBoundaryMode?.boundaryId === localBoundary.id ? 'active-constraint' : ''}" data-action="move-deck-area" ${assemblyLocked ? 'disabled' : ''}>Move deck area</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button" data-action="start-level-down">Add level down</button></div><div class="context-actions context-actions-3"><button class="button ${boardingActive ? 'active-constraint' : ''}" data-action="set-board-direction">${boardingActive ? '✓ Select line' : boarding ? 'Change direction' : 'Board direction'}</button><button class="button" data-action="rotate-board-direction" ${boarding ? '' : 'disabled'}>Rotate 90°</button><button class="button" data-action="clear-board-direction" ${boarding ? '' : 'disabled'}>Clear boards</button></div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="reset-dimension-position">Reset area position</button></div>${deleting ? '<div class="delete-confirmation"><strong>Delete this complete deck area?</strong><span>Attached stairs, railings, Level Down objects, and local dimensions will also be removed.</span><div class="context-actions"><button class="button danger" data-action="confirm-delete-deck">Confirm delete</button><button class="button" data-action="cancel-delete-deck">Cancel</button></div></div>' : '<button class="button danger context-full" data-action="request-delete-deck">Delete deck area</button>'}<div class="context-note">${assemblyLocked ? 'Unlock local nodes and edges before moving this deck.' : boarding ? `Boarding follows a ${formatInches(boarding.boardWidth)} board with a ${formatInches(boarding.gap)} gap.` : 'Select Board direction, then touch any construction line. Deck objects remain above the subtle board pattern.'}</div></section>`;
+      return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(localBoundary.computed.areaSquareInches)}${levelDown > 0 ? ` · ↓ ${formatInches(levelDown)}` : ''}</h2></div>${close}</div><label class="context-select"><span>Down level · local deck</span><div class="compound-field"><input id="boundary-level-down" value="${formatInches(levelDown)}"><button class="button" data-action="apply-boundary-level">Apply</button></div></label><div class="context-actions"><button class="button primary ${moveBoundaryMode?.boundaryId === localBoundary.id ? 'active-constraint' : ''}" data-action="move-deck-area" ${assemblyLocked ? 'disabled' : ''}>Move deck area</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button" data-action="start-level-down">Add level down</button></div><div class="context-actions context-actions-3"><button class="button ${boardingActive ? 'active-constraint' : ''}" data-action="set-board-direction">${boardingActive ? '✓ Select line' : boarding ? 'Change direction' : 'Board direction'}</button><button class="button" data-action="rotate-board-direction" ${boarding ? '' : 'disabled'}>Rotate 90°</button><button class="button" data-action="clear-board-direction" ${boarding ? '' : 'disabled'}>Clear boards</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="reset-dimension-position">Reset area position</button></div>${deleting ? '<div class="delete-confirmation"><strong>Delete this complete deck area?</strong><span>Attached stairs, railings, Level Down objects, and local dimensions will also be removed.</span><div class="context-actions"><button class="button danger" data-action="confirm-delete-deck">Confirm delete</button><button class="button" data-action="cancel-delete-deck">Cancel</button></div></div>' : '<button class="button danger context-full" data-action="request-delete-deck">Delete deck area</button>'}<div class="context-note">${assemblyLocked ? 'Unlock local nodes and edges before moving this deck.' : boarding ? `Boarding follows a ${formatInches(boarding.boardWidth)} board with a ${formatInches(boarding.gap)} gap.` : 'Select Board direction, then touch any construction line. Deck objects remain above the subtle board pattern.'}</div></section>`;
     }
     if (reference?.kind === 'level-down-area') return renderLevelDownContext(reference.levelDown, reference.region, deckingVisible, close, true);
     return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected annotation</div><h2>Dimension</h2></div>${close}</div><div class="context-actions"><button class="button primary" data-action="edit-dimension">Edit object</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div><button class="button danger context-full" data-action="toggle-selected-dimension">Delete dimension</button></section>`;
@@ -345,7 +350,7 @@ function renderUtilityPopover() {
 function renderCatToolbar() {
   if (mode !== 'cat') return '';
   const dimensionsVisible = getCatDimensionLayer(documentModel).visible;
-  return `<div class="cat-toolbar" role="toolbar" aria-label="CAT construction tools"><div class="cat-toolbar-title"><strong>CAT CL</strong><small>${catDraft ? 'Choose the second point' : 'Reference geometry'}</small></div><button class="button ${catTool === 'line' ? 'primary' : 'ghost'}" data-action="cat-tool-line" aria-pressed="${catTool === 'line'}"><span>╱</span> Line</button><button class="button ${catTool === 'measure' ? 'primary' : 'ghost'}" data-action="cat-tool-measure" aria-pressed="${catTool === 'measure'}"><span>↔</span> Measuring tape</button><button class="button ${dimensionsVisible ? 'active-constraint' : 'ghost'}" data-action="toggle-cat-dimensions" aria-pressed="${dimensionsVisible}">${dimensionsVisible ? '◉' : '○'} CAT dimensions</button><button class="button ghost" data-action="close-cat-tool">Done</button></div>`;
+  return `<div class="cat-toolbar" role="toolbar" aria-label="CAT construction tools"><div class="cat-toolbar-title"><strong>CAT CL</strong><small>${catDraft ? 'Choose the second point' : catTool === 'trim' || catTool === 'extend' ? 'Choose a CAT line' : catTool === 'note' ? 'Choose arrow point' : 'Reference geometry'}</small></div><button class="button ${catTool === 'line' ? 'primary' : 'ghost'}" data-action="cat-tool-line" aria-pressed="${catTool === 'line'}"><span>╱</span> Line</button><button class="button ${catTool === 'measure' ? 'primary' : 'ghost'}" data-action="cat-tool-measure" aria-pressed="${catTool === 'measure'}"><span>↔</span> Tape</button><button class="button ${catTool === 'trim' ? 'primary' : 'ghost'}" data-action="cat-tool-trim" aria-pressed="${catTool === 'trim'}">⌫ Trim</button><button class="button ${catTool === 'extend' ? 'primary' : 'ghost'}" data-action="cat-tool-extend" aria-pressed="${catTool === 'extend'}">⇥ Extend</button><button class="button ${catTool === 'note' ? 'primary' : 'ghost'}" data-action="cat-tool-note" aria-pressed="${catTool === 'note'}">↗ Note</button><button class="button ${dimensionsVisible ? 'active-constraint' : 'ghost'}" data-action="toggle-cat-dimensions" aria-pressed="${dimensionsVisible}">${dimensionsVisible ? '◉' : '○'} CAT dimensions</button><button class="button ghost" data-action="close-cat-tool">Done</button></div>`;
 }
 
 function renderVisibilityControls() {
@@ -683,6 +688,7 @@ function renderCatGraphics(svg) {
     });
   }
   if (getCatDimensionLayer(documentModel).visible) getCatMeasurements(documentModel).forEach((measurement) => renderCatMeasurement(svg, measurement, false));
+  if (getCatDimensionLayer(documentModel).visible) getCatNotes(documentModel).forEach((note) => renderCatNote(svg, note));
   if (mode === 'cat' && catDraft?.start && catPointer) {
     if (catSnapState.guides.includes('vertical')) svg.append(svgElement('line', { x1: catPointer.x, y1: viewport.y, x2: catPointer.x, y2: viewport.y + viewport.height, class: 'cat-guide-line' }));
     if (catSnapState.guides.includes('horizontal')) svg.append(svgElement('line', { x1: viewport.x, y1: catPointer.y, x2: viewport.x + viewport.width, y2: catPointer.y, class: 'cat-guide-line' }));
@@ -693,6 +699,37 @@ function renderCatGraphics(svg) {
       svg.append(svgElement('circle', { cx: catPointer.x, cy: catPointer.y, r: Math.max(2.2, viewport.width / 280), class: 'cat-snap-marker' }));
     }
   }
+}
+
+function catNoteLabel(note) {
+  const index = getCatNotes(documentModel).findIndex((entry) => entry.id === note.id);
+  return `NOTE ${Math.max(1, index + 1)}`;
+}
+
+function renderCatNote(svg, note) {
+  const labelPoint = { x: note.anchor.x + note.labelOffset.x, y: note.anchor.y + note.labelOffset.y };
+  const label = catNoteLabel(note);
+  const selectedClass = selected.kind === 'cat' && selected.id === note.id ? 'selected' : '';
+  const dx = note.anchor.x - labelPoint.x;
+  const dy = note.anchor.y - labelPoint.y;
+  const length = Math.hypot(dx, dy) || 1;
+  svg.append(svgElement('line', { x1: labelPoint.x, y1: labelPoint.y, x2: note.anchor.x, y2: note.anchor.y, class: `cat-note-leader ${selectedClass}` }));
+  const direction = { x: dx / length, y: dy / length };
+  const normal = { x: -direction.y, y: direction.x };
+  const arrow = [
+    note.anchor,
+    { x: note.anchor.x - direction.x * 7 + normal.x * 3, y: note.anchor.y - direction.y * 7 + normal.y * 3 },
+    { x: note.anchor.x - direction.x * 7 - normal.x * 3, y: note.anchor.y - direction.y * 7 - normal.y * 3 },
+  ];
+  svg.append(svgElement('polygon', { points: arrow.map((point) => `${point.x},${point.y}`).join(' '), class: `cat-note-arrow ${selectedClass}` }));
+  const width = Math.max(34, label.length * 4.1);
+  const group = svgElement('g', { class: `cat-note-label ${selectedClass}` });
+  group.append(svgElement('rect', { x: labelPoint.x - width / 2 - 4, y: labelPoint.y - 8, width: width + 8, height: 16, rx: 4, class: 'cat-note-hit', 'data-cat-object-id': note.id, 'data-cat-note-id': note.id }));
+  group.append(svgElement('rect', { x: labelPoint.x - width / 2, y: labelPoint.y - 6, width, height: 12, rx: 3, class: 'cat-note-bg', 'data-cat-object-id': note.id, 'data-cat-note-id': note.id }));
+  const text = svgElement('text', { x: labelPoint.x, y: labelPoint.y + 1, class: 'cat-note-text' });
+  text.textContent = `${note.audioDataUrl ? '● ' : ''}${label}`;
+  group.append(text);
+  svg.append(group);
 }
 
 function renderCatMeasurement(svg, measurement, preview) {
@@ -942,6 +979,7 @@ function renderAreaDimension(svg, current) {
   const labelPoint = { x: center.x + offset.x, y: center.y - 24 + offset.y };
   const tip = { x: center.x + leaderOffset.x, y: center.y + leaderOffset.y };
   const label = `AREA · ${formatSquareFeet(current.computed.areaSquareInches)}`;
+  const levelDown = getBoundaryLevelDown(current);
   const width = Math.max(46, label.length * 3.5);
   const selectedClass = selected.kind === 'dimension' && selected.id === referenceId ? 'selected' : '';
   renderDimensionLeader(svg, labelPoint, tip, referenceId);
@@ -951,6 +989,14 @@ function renderAreaDimension(svg, current) {
   const text = svgElement('text', { x: labelPoint.x, y: labelPoint.y + 1, class: 'dimension-text area' });
   text.textContent = label;
   group.append(text);
+  if (levelDown > 0) {
+    const levelLabel = `↓ ${formatInches(levelDown)}`;
+    const levelWidth = Math.max(24, levelLabel.length * 3.5);
+    group.append(svgElement('rect', { x: labelPoint.x - levelWidth / 2, y: labelPoint.y + 8, width: levelWidth, height: 10, rx: 2.5, class: `dimension-bg deck-level ${selectedClass}`, 'data-dimension-id': referenceId, 'data-boundary-id': current.id }));
+    const levelText = svgElement('text', { x: labelPoint.x, y: labelPoint.y + 13.5, class: 'dimension-text deck-level' });
+    levelText.textContent = levelLabel;
+    group.append(levelText);
+  }
   svg.append(group);
 }
 
@@ -1292,7 +1338,12 @@ function setMode(nextMode) {
     if (next !== documentModel) { documentModel = next; persist(); }
     catDraft = null;
     catPointer = null;
-    message = catTool === 'measure' ? 'Measuring tape · choose the first point' : 'CAT Line · choose the first point';
+    message = ({
+      measure: 'Measuring tape · choose the first point',
+      trim: 'Trim · touch the CAT Line segment to remove',
+      extend: 'Extend · touch near the CAT Line endpoint to extend',
+      note: 'CAT Note · choose the arrow point',
+    })[catTool] ?? 'CAT Line · choose the first point';
   }
   if (mode === 'level-down') message = 'Click a boundary edge or corner to start Level Down';
   render();
@@ -1307,6 +1358,7 @@ function canvasPointerDown(svg, event) {
   const railingId = event.target.dataset.railingId;
   const levelDownSegmentId = event.target.dataset.levelDownSegmentId;
   const catObjectId = event.target.dataset.catObjectId;
+  const catNoteId = event.target.dataset.catNoteId;
   const targetBoundaryId = event.target.dataset.boundaryId ?? boundaryForReference(vertexId ?? edgeId ?? dimensionId ?? levelDownSegmentId)?.id;
   if (moveBoundaryMode && event.button === 0) {
     event.preventDefault();
@@ -1320,7 +1372,7 @@ function canvasPointerDown(svg, event) {
   activateBoundary(targetBoundaryId);
   if (mode === 'cat' && event.button === 0) {
     event.preventDefault();
-    placeCatPoint(screenToWorld(svg, event), event.pointerType, event);
+    placeCatPoint(screenToWorld(svg, event), event.pointerType, event, catObjectId);
     return;
   }
   if (boardingDirectionMode && event.button === 0) {
@@ -1398,6 +1450,16 @@ function canvasPointerDown(svg, event) {
     selected = { kind: 'dimension', id: dimensionId };
     dimensionDragStart = { pointerId: event.pointerId, document: documentModel, point: screenToWorld(svg, event), offset: getDimensionOffset(documentModel, dimensionId), moved: false };
     svg.setPointerCapture(event.pointerId);
+    return;
+  }
+  if (mode === 'select' && catNoteId) {
+    const note = getCatNotes(documentModel).find((entry) => entry.id === catNoteId);
+    if (!note) return;
+    selected = { kind: 'cat', id: catNoteId };
+    catNoteDragStart = { pointerId: event.pointerId, document: documentModel, point: screenToWorld(svg, event), offset: note.labelOffset, moved: false };
+    svg.setPointerCapture(event.pointerId);
+    refreshContextPanel();
+    drawCanvasRefresh();
     return;
   }
   if (mode === 'select' && catObjectId) {
@@ -1548,7 +1610,39 @@ function placeDraftPoint(raw, pointerType = 'mouse') {
   render();
 }
 
-function placeCatPoint(raw, pointerType = 'mouse', pointerEvent = null) {
+function catCuttingSegments(excludedLineId = null) {
+  const boundarySegments = boundaries().flatMap((deck) => deck.edges.map((edge, index) => ({
+    id: edge.id,
+    start: deck.vertices[index],
+    end: deck.vertices[(index + 1) % deck.vertices.length],
+  })));
+  const catSegments = getCatLines(documentModel).filter((line) => line.id !== excludedLineId).map((line) => ({ id: line.id, start: line.vertices[0], end: line.vertices[1] }));
+  return [...boundarySegments, ...catSegments];
+}
+
+function placeCatPoint(raw, pointerType = 'mouse', pointerEvent = null, targetCatObjectId = null) {
+  if (catTool === 'trim' || catTool === 'extend') {
+    const line = getCatLines(documentModel).find((entry) => entry.id === targetCatObjectId);
+    if (!line) { message = `Choose a CAT Line to ${catTool}`; updateStatusMessage(); return; }
+    try {
+      const updated = catTool === 'trim'
+        ? trimCatLine(line, raw, catCuttingSegments(line.id))
+        : extendCatLine(line, raw, catCuttingSegments(line.id));
+      selected = { kind: 'cat', id: line.id };
+      message = catTool === 'trim' ? 'CAT Line trimmed to the nearest crossing' : 'Nearest endpoint extended to the first crossing';
+      commit(upsertObject(documentModel, updated), catTool === 'trim' ? 'Trim CAT construction line' : 'Extend CAT construction line');
+    } catch (error) { message = error.message; render(); }
+    return;
+  }
+  if (catTool === 'note') {
+    const text = window.prompt('Construction note for the estimator:', '');
+    if (text === null) { message = 'CAT Note canceled'; updateStatusMessage(); return; }
+    const note = createCatNote(raw, text);
+    selected = { kind: 'cat', id: note.id };
+    message = 'CAT Note added · drag its label to reposition it';
+    commit(upsertObject(documentModel, note), 'Add CAT construction note');
+    return;
+  }
   const snapped = snapForPointer(raw, catDraft?.start ?? null, [], new Set(), pointerType);
   catSnapState = snapped;
   if (!catDraft?.start) {
@@ -1659,6 +1753,18 @@ function canvasPointerMove(svg, event) {
     return;
   }
   const raw = screenToWorld(svg, event);
+  if (catNoteDragStart?.pointerId === event.pointerId) {
+    const note = catNoteDragStart.document.objects.find((object) => object.type === CAT_NOTE_TYPE && object.id === selected.id);
+    if (!note) return;
+    const dx = raw.x - catNoteDragStart.point.x;
+    const dy = raw.y - catNoteDragStart.point.y;
+    catNoteDragStart.moved ||= Math.hypot(dx, dy) > viewport.width / Math.max(svg.clientWidth, 1) * 2;
+    const updated = updateCatNote(note, { labelOffset: { x: catNoteDragStart.offset.x + dx, y: catNoteDragStart.offset.y + dy } });
+    documentModel = upsertObject(catNoteDragStart.document, updated);
+    persist();
+    drawCanvasRefresh();
+    return;
+  }
   if (mode === 'cat' && catDraft?.start) {
     catSnapState = snapForPointer(raw, catDraft.start, [], new Set(), event.pointerType);
     catPointer = catSnapState.point;
@@ -1839,6 +1945,16 @@ function finishPointerGesture(svg, event) {
   if (panGesture) {
     panGesture = null;
     app.querySelector('.model-canvas')?.classList.remove('panning');
+  }
+  if (catNoteDragStart?.pointerId === event.pointerId) {
+    const gesture = catNoteDragStart;
+    const finalDocument = documentModel;
+    catNoteDragStart = null;
+    documentModel = gesture.document;
+    if (event.type === 'pointercancel') { message = 'CAT Note move canceled'; persist(); render(); }
+    else if (gesture.moved) { message = 'CAT Note label repositioned'; commit(finalDocument, 'Move CAT Note label'); }
+    else { documentModel = finalDocument; persist(); render(); }
+    return;
   }
   if (moveBoundaryGesture?.pointerId === event.pointerId) {
     const gesture = moveBoundaryGesture;
@@ -2244,6 +2360,7 @@ function fitProject(svg = app.querySelector('.model-canvas')) {
   const catPoints = [
     ...getCatLines(documentModel).flatMap((line) => line.vertices),
     ...getCatMeasurements(documentModel).flatMap((measurement) => [measurement.start, measurement.end]),
+    ...getCatNotes(documentModel).flatMap((note) => [note.anchor, { x: note.anchor.x + note.labelOffset.x, y: note.anchor.y + note.labelOffset.y }]),
   ];
   const points = [...boundaries().flatMap((entry) => entry.vertices), ...catPoints, ...draft];
   const aspect = (svg?.clientWidth || 1000) / (svg?.clientHeight || 700);
@@ -2737,6 +2854,29 @@ function handleAction(action, source = null) {
     setMode('cat');
     return;
   }
+  if (['cat-tool-trim', 'cat-tool-extend', 'cat-tool-note'].includes(action)) {
+    catTool = action.replace('cat-tool-', '');
+    catDraft = null;
+    catPointer = null;
+    numericBuffer = '';
+    setMode('cat');
+    return;
+  }
+  if (action === 'apply-cat-note' && selected.kind === 'cat') {
+    const note = getCatNotes(documentModel).find((entry) => entry.id === selected.id);
+    if (!note) return;
+    const text = app.querySelector('#cat-note-text')?.value ?? '';
+    message = 'CAT Note updated';
+    commit(upsertObject(documentModel, updateCatNote(note, { text })), 'Edit CAT construction note');
+  }
+  if (action === 'record-cat-note-audio' && selected.kind === 'cat') { startCatNoteRecording(selected.id); return; }
+  if (action === 'stop-cat-note-audio') { stopCatNoteRecording(); return; }
+  if (action === 'remove-cat-note-audio' && selected.kind === 'cat') {
+    const note = getCatNotes(documentModel).find((entry) => entry.id === selected.id);
+    if (!note) return;
+    message = 'Voice note removed';
+    commit(upsertObject(documentModel, updateCatNote(note, { audioDataUrl: null })), 'Remove CAT voice note');
+  }
   if (action === 'toggle-cat-dimensions') {
     const visible = !getCatDimensionLayer(documentModel).visible;
     message = `CAT dimensions ${visible ? 'shown' : 'hidden'}`;
@@ -2755,7 +2895,7 @@ function handleAction(action, source = null) {
     if (!removed) return;
     const next = { ...documentModel, objects: documentModel.objects.filter((object) => object.id !== selected.id) };
     selected = { kind: null, id: null };
-    message = removed.type === CAT_MEASUREMENT_TYPE ? 'CAT measurement removed' : 'CAT construction line removed';
+    message = removed.type === CAT_NOTE_TYPE ? 'CAT Note removed' : removed.type === CAT_MEASUREMENT_TYPE ? 'CAT measurement removed' : 'CAT construction line removed';
     commit(next, 'Delete CAT object');
   }
   if (action === 'toggle-cat-construction-lines') {
@@ -2808,6 +2948,7 @@ function resetProjectWorkspaceState() {
   levelDownDraft = [];
   catDraft = null;
   catPointer = null;
+  catNoteDragStart = null;
   catSnapState = { type: 'none', label: 'Free', guides: [] };
   utilityPanel = null;
   exportMenuOpen = false;
@@ -2925,6 +3066,61 @@ function updateStairLiveHud(event = null) {
 function updateStatusMessage() {
   const status = app.querySelector('.status-pill');
   if (status) status.textContent = message;
+}
+
+function audioBlobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function startCatNoteRecording(noteId) {
+  const note = getCatNotes(documentModel).find((entry) => entry.id === noteId);
+  if (!note || catAudioRecorder) return;
+  if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
+    message = 'Voice recording is not available in this browser';
+    render();
+    return;
+  }
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    const preferredType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus') ? 'audio/webm;codecs=opus' : '';
+    const recorder = new MediaRecorder(stream, { ...(preferredType ? { mimeType: preferredType } : {}), audioBitsPerSecond: 32000 });
+    recorder.noteId = noteId;
+    recorder.stream = stream;
+    catAudioChunks = [];
+    recorder.addEventListener('dataavailable', (event) => { if (event.data.size) catAudioChunks.push(event.data); });
+    recorder.addEventListener('stop', async () => {
+      window.clearTimeout(recorder.stopTimer);
+      recorder.stream.getTracks().forEach((track) => track.stop());
+      const current = getCatNotes(documentModel).find((entry) => entry.id === recorder.noteId);
+      const blob = new Blob(catAudioChunks, { type: recorder.mimeType || 'audio/webm' });
+      catAudioRecorder = null;
+      catAudioChunks = [];
+      if (!current || !blob.size) { message = 'Voice recording canceled'; render(); return; }
+      try {
+        const audioDataUrl = await audioBlobToDataUrl(blob);
+        message = 'Voice note saved';
+        commit(upsertObject(documentModel, updateCatNote(current, { audioDataUrl })), 'Record CAT voice note');
+      } catch { message = 'Voice note could not be saved'; render(); }
+    });
+    catAudioRecorder = recorder;
+    recorder.start();
+    recorder.stopTimer = window.setTimeout(() => stopCatNoteRecording(), 30000);
+    message = 'Recording voice note · press Stop when finished';
+    render();
+  } catch {
+    catAudioRecorder = null;
+    message = 'Microphone access was not granted';
+    render();
+  }
+}
+
+function stopCatNoteRecording() {
+  if (catAudioRecorder?.state === 'recording') catAudioRecorder.stop();
 }
 
 function acceptNumericLength() {

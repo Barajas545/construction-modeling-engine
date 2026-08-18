@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createProjectDocument, parseProject, serializeProject, upsertObject } from '../src/core/document/project-document.js';
-import { createCatLine, createCatMeasurement, deriveCatMeasurement, getCatSnapObjects, resolveCatLineEndpoint } from '../src/tools/cat-cl/cat-cl.js';
+import { createCatLine, createCatMeasurement, createCatNote, deriveCatMeasurement, extendCatLine, getCatSnapObjects, resolveCatLineEndpoint, trimCatLine, updateCatNote } from '../src/tools/cat-cl/cat-cl.js';
 import { getCatDimensionLayer, setCatDimensionLayerVisibility } from '../src/core/annotations/cat-dimension-layer.js';
 import { parseConstructionLength } from '../src/core/units/parse-length.js';
 
@@ -39,4 +39,34 @@ test('CAT Line places typed imperial and metric lengths along the live direction
     const end = resolveCatLineEndpoint(start, toward, length);
     assert.ok(Math.abs(Math.hypot(end.x - start.x, end.y - start.y) - length) < 1e-8);
   }
+});
+
+test('CAT Trim removes the clicked side at the nearest crossing', () => {
+  const line = createCatLine({ x: 0, y: 0 }, { x: 100, y: 0 }, {}, () => 'trim-line');
+  const cutter = { start: { x: 40, y: -20 }, end: { x: 40, y: 20 } };
+  const trimmedStart = trimCatLine(line, { x: 10, y: 0 }, [cutter]);
+  assert.equal(trimmedStart.vertices[0].x, 40);
+  assert.equal(trimmedStart.vertices[1].x, 100);
+  const trimmedEnd = trimCatLine(line, { x: 90, y: 0 }, [cutter]);
+  assert.equal(trimmedEnd.vertices[0].x, 0);
+  assert.equal(trimmedEnd.vertices[1].x, 40);
+});
+
+test('CAT Extend moves the nearest endpoint to the first crossing beyond it', () => {
+  const line = createCatLine({ x: 20, y: 0 }, { x: 80, y: 0 }, {}, () => 'extend-line');
+  const cutters = [
+    { start: { x: 0, y: -20 }, end: { x: 0, y: 20 } },
+    { start: { x: 100, y: -20 }, end: { x: 100, y: 20 } },
+  ];
+  assert.equal(extendCatLine(line, { x: 22, y: 0 }, cutters).vertices[0].x, 0);
+  assert.equal(extendCatLine(line, { x: 78, y: 0 }, cutters).vertices[1].x, 100);
+});
+
+test('CAT Notes preserve arrow point, draggable label, text, and optional voice data', () => {
+  const note = createCatNote({ x: 10, y: 20 }, 'Verify footing', {}, () => 'note-1');
+  const updated = updateCatNote(note, { labelOffset: { x: 60, y: -40 }, audioDataUrl: 'data:audio/webm;base64,AAAA' });
+  assert.deepEqual(updated.anchor, { x: 10, y: 20 });
+  assert.deepEqual(updated.labelOffset, { x: 60, y: -40 });
+  assert.equal(updated.text, 'Verify footing');
+  assert.match(updated.audioDataUrl, /^data:audio\/webm/);
 });

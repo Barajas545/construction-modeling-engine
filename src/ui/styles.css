@@ -191,6 +191,8 @@ button { color: inherit; }
 .dimension-bg.selected { stroke: var(--accent); stroke-width: 1; }
 .dimension-bg.area { fill: #111a1f; stroke: var(--cyan); stroke-width: .7; }
 .dimension-text.area { fill: #fff; font-weight: 800; letter-spacing: .08em; }
+.dimension-bg.deck-level { fill: #10171b; stroke: #8aa3ad; stroke-width: .65; pointer-events: all; }
+.dimension-text.deck-level { fill: #dce7e9; font-size: 5px; font-weight: 850; }
 .dimension-bg.stair { fill: #11181d; stroke: #94a7ad; stroke-width: .7; }
 .dimension-bg.stair.invalid { fill: #261316; stroke: var(--danger); stroke-width: 1.2; }
 .dimension-text.stair { fill: #fff; font-size: 6px; font-weight: 850; letter-spacing: .05em; }
@@ -237,6 +239,15 @@ button { color: inherit; }
 .cat-measure-hit { fill: transparent; pointer-events: all; cursor: pointer; }
 .cat-measure-line-hit { stroke: transparent; stroke-width: 18; vector-effect: non-scaling-stroke; cursor: pointer; }
 .cat-measure-text { fill: #e0d6a5; font-size: 4.7px; font-weight: 720; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+.cat-note-leader { stroke: rgb(240 209 76 / 72%); stroke-width: 1.1; vector-effect: non-scaling-stroke; pointer-events: none; }
+.cat-note-leader.selected { stroke: #fff1a6; stroke-width: 1.8; }
+.cat-note-arrow { fill: #f0d14c; pointer-events: none; }
+.cat-note-arrow.selected { fill: #fff1a6; }
+.cat-note-hit { fill: transparent; pointer-events: all; cursor: grab; }
+.cat-note-bg { fill: #171812; stroke: rgb(240 209 76 / 62%); stroke-width: .8; pointer-events: all; cursor: grab; }
+.cat-note-label.selected .cat-note-bg { stroke: #fff1a6; stroke-width: 1.3; }
+.cat-note-text { fill: #f3e5a7; font-size: 5px; font-weight: 850; letter-spacing: .06em; text-anchor: middle; dominant-baseline: middle; pointer-events: none; }
+.cat-note-audio { width: 100%; height: 34px; margin-top: 9px; }
 .cat-measure-summary { display: grid; grid-template-columns: repeat(3, 1fr); gap: 6px; margin-top: 11px; }
 .cat-measure-summary span { display: grid; gap: 4px; border: 1px solid #3a3828; border-radius: 7px; background: #111412; padding: 8px 6px; text-align: center; }
 .cat-measure-summary small { color: #918963; font-size: 8px; }
@@ -282,6 +293,8 @@ button { color: inherit; }
 .context-actions-3 .button { padding: 0 6px; font-size: 10px; }
 .context-select { display: grid; gap: 5px; margin-top: 9px; color: var(--muted); font-size: 9px; }
 .context-select select { width: 100%; height: 34px; border: 1px solid #354149; border-radius: 7px; background: #0c1114; color: var(--text); padding: 0 8px; }
+.context-select textarea { width: 100%; resize: vertical; border: 1px solid #354149; border-radius: 7px; background: #0c1114; color: var(--text); padding: 9px; outline: none; line-height: 1.4; }
+.context-select textarea:focus { border-color: rgb(240 209 76 / 60%); box-shadow: 0 0 0 3px rgb(240 209 76 / 7%); }
 .context-full { width: 100%; margin-top: 8px; }
 .context-note { margin-top: 8px; color: #829299; font-size: 9px; line-height: 1.4; }
 .delete-confirmation { margin-top: 9px; border: 1px solid rgb(255 79 87 / 42%); border-radius: 8px; background: rgb(255 79 87 / 7%); padding: 9px; }
