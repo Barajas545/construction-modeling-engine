@@ -55,6 +55,17 @@ export function deriveCatMeasurement(measurement) {
   };
 }
 
+export function resolveCatLineEndpoint(start, toward, length) {
+  if (![start?.x, start?.y, toward?.x, toward?.y, length].every(Number.isFinite) || length <= 0) {
+    throw new Error('CAT Line requires a valid direction and positive length.');
+  }
+  const dx = toward.x - start.x;
+  const dy = toward.y - start.y;
+  const magnitude = Math.hypot(dx, dy);
+  if (magnitude < .0001) return { x: start.x + length, y: start.y };
+  return { x: start.x + dx / magnitude * length, y: start.y + dy / magnitude * length };
+}
+
 export function getCatLines(document) {
   return document.objects.filter((object) => object.type === CAT_LINE_TYPE);
 }

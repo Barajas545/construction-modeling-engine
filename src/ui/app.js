@@ -20,7 +20,7 @@ import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomView
 import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { deleteDeckAssembly } from '../tools/deck-boundary/delete-deck-assembly.js';
 import { clearDeckBoardingDirection, deriveDeckBoardingSegments, getDeckBoarding, rotateDeckBoardingDirection, setDeckBoardingDirection } from '../tools/deck-boarding/deck-boarding.js';
-import { CAT_LINE_TYPE, CAT_MEASUREMENT_TYPE, createCatLine, createCatMeasurement, deriveCatMeasurement, getCatLines, getCatMeasurements, getCatSnapObjects } from '../tools/cat-cl/cat-cl.js';
+import { CAT_LINE_TYPE, CAT_MEASUREMENT_TYPE, createCatLine, createCatMeasurement, deriveCatMeasurement, getCatLines, getCatMeasurements, getCatSnapObjects, resolveCatLineEndpoint } from '../tools/cat-cl/cat-cl.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, materializeStairSideJunction, mergeStairBoundaryConnection, removeStairSideJunction, resolveStairHostEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
@@ -1320,7 +1320,7 @@ function canvasPointerDown(svg, event) {
   activateBoundary(targetBoundaryId);
   if (mode === 'cat' && event.button === 0) {
     event.preventDefault();
-    placeCatPoint(screenToWorld(svg, event), event.pointerType);
+    placeCatPoint(screenToWorld(svg, event), event.pointerType, event);
     return;
   }
   if (boardingDirectionMode && event.button === 0) {
@@ -1548,14 +1548,16 @@ function placeDraftPoint(raw, pointerType = 'mouse') {
   render();
 }
 
-function placeCatPoint(raw, pointerType = 'mouse') {
+function placeCatPoint(raw, pointerType = 'mouse', pointerEvent = null) {
   const snapped = snapForPointer(raw, catDraft?.start ?? null, [], new Set(), pointerType);
   catSnapState = snapped;
   if (!catDraft?.start) {
     catDraft = { start: snapped.point };
     catPointer = snapped.point;
+    numericBuffer = '';
     message = `${snapped.label} · choose the second point`;
     render();
+    if (pointerEvent && catTool === 'line') requestAnimationFrame(() => updateHud(pointerEvent));
     return;
   }
   try {
@@ -1567,7 +1569,9 @@ function placeCatPoint(raw, pointerType = 'mouse') {
       : `${formatFeetInches(Math.hypot(snapped.point.x - catDraft.start.x, snapped.point.y - catDraft.start.y))} CAT line added · continue or press Escape`;
     catDraft = catTool === 'line' ? { start: snapped.point } : null;
     catPointer = catTool === 'line' ? snapped.point : null;
+    numericBuffer = '';
     commit(upsertObject(documentModel, object), catTool === 'measure' ? 'Add CAT measuring tape' : 'Add CAT construction line');
+    if (pointerEvent && catTool === 'line') requestAnimationFrame(() => updateHud(pointerEvent));
   } catch (error) {
     message = error.message;
     render();
@@ -1660,6 +1664,8 @@ function canvasPointerMove(svg, event) {
     catPointer = catSnapState.point;
     message = `${catSnapState.label} · ${catTool === 'measure' ? 'horizontal, vertical, and point-to-point preview' : 'click to place CAT line'}`;
     drawCanvasRefresh();
+    if (catTool === 'line') updateHud(event);
+    else hideHud();
     updateStatusMessage();
     return;
   }
@@ -2867,18 +2873,22 @@ function escapeHtml(value) {
 
 function updateHud(event) {
   const hud = app.querySelector('.cursor-hud');
-  if (!hud || mode !== 'draw' || !draft.length || !pointerWorld) { hideHud(); return; }
+  const drawingBoundary = mode === 'draw' && draft.length && pointerWorld;
+  const drawingCatLine = mode === 'cat' && catTool === 'line' && catDraft?.start && catPointer;
+  if (!hud || (!drawingBoundary && !drawingCatLine)) { hideHud(); return; }
   const panel = app.querySelector('.canvas-panel').getBoundingClientRect();
   hud.style.left = `${Math.min(panel.width - 180, event.clientX - panel.left + 18)}px`;
   hud.style.top = `${Math.min(panel.height - 120, event.clientY - panel.top + 18)}px`;
   hud.classList.add('visible');
-  const anchor = draft[draft.length - 1];
-  const dx = pointerWorld.x - anchor.x;
-  const dy = pointerWorld.y - anchor.y;
+  const anchor = drawingCatLine ? catDraft.start : draft[draft.length - 1];
+  const activePoint = drawingCatLine ? catPointer : pointerWorld;
+  const activeSnap = drawingCatLine ? catSnapState : snapState;
+  const dx = activePoint.x - anchor.x;
+  const dy = activePoint.y - anchor.y;
   const angle = Math.atan2(dy, dx) * 180 / Math.PI;
   hud.querySelector('[data-hud-length]').textContent = formatFeetInches(Math.hypot(dx, dy));
   hud.querySelector('[data-hud-angle]').textContent = `${Math.round(angle)}°`;
-  hud.querySelector('[data-hud-snap]').textContent = snapState.label;
+  hud.querySelector('[data-hud-snap]').textContent = activeSnap.label;
   const input = hud.querySelector('[data-hud-input]');
   input.textContent = numericBuffer || 'Type a length · Enter';
   input.classList.toggle('active', Boolean(numericBuffer));
@@ -2918,14 +2928,24 @@ function updateStatusMessage() {
 }
 
 function acceptNumericLength() {
-  if (!draft.length || !numericBuffer) return false;
+  const catLineActive = mode === 'cat' && catTool === 'line' && catDraft?.start;
+  if ((!draft.length && !catLineActive) || !numericBuffer) return false;
   const length = parseConstructionLength(numericBuffer);
   if (!length || length <= 0) { message = 'Use a length such as 12\', 144 in, or 3658 mm'; render(); return true; }
-  const anchor = draft[draft.length - 1];
-  const dx = (pointerWorld?.x ?? anchor.x + 1) - anchor.x;
-  const dy = (pointerWorld?.y ?? anchor.y) - anchor.y;
-  const magnitude = Math.hypot(dx, dy) || 1;
-  const exactPoint = { x: anchor.x + dx / magnitude * length, y: anchor.y + dy / magnitude * length };
+  const anchor = catLineActive ? catDraft.start : draft[draft.length - 1];
+  const toward = catLineActive ? catPointer : pointerWorld;
+  const exactPoint = resolveCatLineEndpoint(anchor, toward ?? { x: anchor.x + 1, y: anchor.y }, length);
+  if (catLineActive) {
+    const object = createCatLine(anchor, exactPoint);
+    catDraft = { start: exactPoint };
+    catPointer = exactPoint;
+    catSnapState = { type: 'angle', label: 'Exact length', guides: [] };
+    lastLength = length;
+    numericBuffer = '';
+    message = `${formatFeetInches(length)} CAT Line placed · continue drawing`;
+    commit(upsertObject(documentModel, object), 'Add exact-length CAT construction line');
+    return true;
+  }
   draft.push(exactPoint);
   pointerWorld = exactPoint;
   lastLength = length;
@@ -2947,9 +2967,22 @@ function repeatLastSegment() {
   render();
 }
 
+function repeatLastCatSegment() {
+  if (!lastLength || !catDraft?.start) return;
+  const anchor = catDraft.start;
+  const toward = catPointer ?? { x: anchor.x + 1, y: anchor.y };
+  const endpoint = resolveCatLineEndpoint(anchor, toward, lastLength);
+  const object = createCatLine(anchor, endpoint);
+  catDraft = { start: endpoint };
+  catPointer = endpoint;
+  message = `${formatFeetInches(lastLength)} CAT Line repeated`;
+  commit(upsertObject(documentModel, object), 'Repeat CAT construction line');
+}
+
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   const editingField = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+  const numericLineMode = mode === 'draw' || (mode === 'cat' && catTool === 'line' && Boolean(catDraft?.start));
   if (event.key === 'Escape' && (projectMenuOpen || exportMenuOpen)) {
     event.preventDefault();
     projectMenuOpen = false;
@@ -2996,35 +3029,35 @@ window.addEventListener('keydown', (event) => {
   }
   if (modifier && event.key.toLowerCase() === 'z') { event.preventDefault(); handleAction(event.shiftKey ? 'redo' : 'undo'); }
   if (modifier && event.key.toLowerCase() === 'y') { event.preventDefault(); handleAction('redo'); }
-  if (!modifier && !editingField && mode !== 'draw' && event.key.toLowerCase() === 'e') {
+  if (!modifier && !editingField && !numericLineMode && event.key.toLowerCase() === 'e') {
     event.preventDefault();
     const enabled = !getSnapSettings(documentModel).edges;
     message = `Edge and corner snap ${enabled ? 'enabled' : 'disabled'}`;
     commit(setSnapSettings(documentModel, { edges: enabled }), 'Toggle edge snap');
     return;
   }
-  if (!modifier && !editingField && mode !== 'draw' && event.key.toLowerCase() === 'g') {
+  if (!modifier && !editingField && !numericLineMode && event.key.toLowerCase() === 'g') {
     event.preventDefault();
     const enabled = !getSnapSettings(documentModel).grid;
     message = `Grid snap ${enabled ? 'enabled' : 'disabled'}`;
     commit(setSnapSettings(documentModel, { grid: enabled }), 'Toggle grid snap');
     return;
   }
-  if (!modifier && !editingField && mode !== 'draw' && event.key.toLowerCase() === 'n') {
+  if (!modifier && !editingField && !numericLineMode && event.key.toLowerCase() === 'n') {
     event.preventDefault();
     const enabled = !getSnapSettings(documentModel).nodeInference;
     message = `Node inference ${enabled ? 'enabled' : 'disabled'}`;
     commit(setSnapSettings(documentModel, { nodeInference: enabled }), 'Toggle node inference');
     return;
   }
-  if (mode === 'draw' && !modifier && /^[0-9a-z.'"\-]$/i.test(event.key)) {
-    if (event.key.toLowerCase() === 'r' && !numericBuffer) { event.preventDefault(); repeatLastSegment(); return; }
+  if (numericLineMode && !modifier && !editingField && /^[0-9a-z.'"\-]$/i.test(event.key)) {
+    if (event.key.toLowerCase() === 'r' && !numericBuffer) { event.preventDefault(); mode === 'cat' ? repeatLastCatSegment() : repeatLastSegment(); return; }
     event.preventDefault(); numericBuffer += event.key; message = 'Enter an exact segment length'; updateHudFromKeyboard(); return;
   }
-  if (mode === 'draw' && event.key === 'Backspace' && numericBuffer) { event.preventDefault(); numericBuffer = numericBuffer.slice(0, -1); updateHudFromKeyboard(); return; }
-  if (event.key === 'Enter' && mode === 'draw') { event.preventDefault(); if (!acceptNumericLength()) completeDraft(); }
-  if (event.key === ' ' && mode === 'draw') { event.preventDefault(); if (numericBuffer) { numericBuffer += ' '; updateHudFromKeyboard(); } else repeatLastSegment(); }
-  if (event.key === 'Tab' && mode === 'draw') { event.preventDefault(); message = numericBuffer ? 'Press Enter to accept length' : 'Type a dimension in feet, inches, millimeters, or meters'; updateHudFromKeyboard(); }
+  if (numericLineMode && event.key === 'Backspace' && numericBuffer) { event.preventDefault(); numericBuffer = numericBuffer.slice(0, -1); updateHudFromKeyboard(); return; }
+  if (event.key === 'Enter' && numericLineMode) { event.preventDefault(); if (!acceptNumericLength() && mode === 'draw') completeDraft(); }
+  if (event.key === ' ' && numericLineMode) { event.preventDefault(); if (numericBuffer) { numericBuffer += ' '; updateHudFromKeyboard(); } else mode === 'cat' ? repeatLastCatSegment() : repeatLastSegment(); }
+  if (event.key === 'Tab' && numericLineMode) { event.preventDefault(); message = numericBuffer ? 'Press Enter to accept length' : 'Type a dimension in feet, inches, millimeters, or meters'; updateHudFromKeyboard(); }
   if (event.key === 'Escape' && mode === 'draw') {
     event.preventDefault();
     if (numericBuffer) numericBuffer = '';
@@ -3035,7 +3068,10 @@ window.addEventListener('keydown', (event) => {
   }
   if (event.key === 'Escape' && mode === 'cat') {
     event.preventDefault();
-    if (catDraft?.start) {
+    if (numericBuffer) {
+      numericBuffer = '';
+      message = 'Exact CAT length entry cleared';
+    } else if (catDraft?.start) {
       catDraft = null;
       catPointer = null;
       message = `${catTool === 'measure' ? 'Measuring tape' : 'CAT Line'} · choose the first point`;

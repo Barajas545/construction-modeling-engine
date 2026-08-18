@@ -25,6 +25,8 @@ CAT CL provides temporary construction reference geometry without changing the a
 - Authoritative construction geometry has priority over CAT geometry; CAT geometry has priority over the grid when targets overlap.
 - Active line inference supports 90°, 45°, and 22.5° increments.
 - Mouse and touch use the same two-point mental model with larger touch tolerances.
+- After the first CAT Line point, the live cursor guide shows length, angle, and the active snap relationship.
+- While the guide is active, users may type an exact imperial or metric length such as `23in`, `6ft`, or `2m`, then press Enter. The line retains its live direction and uses the entered length.
 
 ## Visual Language
 

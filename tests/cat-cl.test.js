@@ -1,8 +1,9 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createProjectDocument, parseProject, serializeProject, upsertObject } from '../src/core/document/project-document.js';
-import { createCatLine, createCatMeasurement, deriveCatMeasurement, getCatSnapObjects } from '../src/tools/cat-cl/cat-cl.js';
+import { createCatLine, createCatMeasurement, deriveCatMeasurement, getCatSnapObjects, resolveCatLineEndpoint } from '../src/tools/cat-cl/cat-cl.js';
 import { getCatDimensionLayer, setCatDimensionLayerVisibility } from '../src/core/annotations/cat-dimension-layer.js';
+import { parseConstructionLength } from '../src/core/units/parse-length.js';
 
 test('CAT construction lines remain serializable reference geometry', () => {
   const line = createCatLine({ x: 0, y: 0 }, { x: 120, y: 60 }, {}, () => 'cat-1');
@@ -28,4 +29,14 @@ test('CAT measuring tape derives horizontal, vertical, and point-to-point dimens
 test('CAT dimensions use an independent serializable layer', () => {
   const hidden = setCatDimensionLayerVisibility(createProjectDocument({ id: 'project-1' }), false);
   assert.equal(getCatDimensionLayer(parseProject(serializeProject(hidden))).visible, false);
+});
+
+test('CAT Line places typed imperial and metric lengths along the live direction', () => {
+  const start = { x: 10, y: 20 };
+  const toward = { x: 13, y: 24 };
+  for (const entry of ['23in', '6ft', '2m']) {
+    const length = parseConstructionLength(entry);
+    const end = resolveCatLineEndpoint(start, toward, length);
+    assert.ok(Math.abs(Math.hypot(end.x - start.x, end.y - start.y) - length) < 1e-8);
+  }
 });
