@@ -6,6 +6,7 @@ import { getBoundaryLevelDown, getDeckBoundaries, getProjectSurfaceArea, setBoun
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
 import { getDimensionLayer, getDimensionLeaderOffset, getDimensionOffset, isDimensionReferenceVisible, setDimensionLayerVisibility, setDimensionLeaderOffset, setDimensionOffset, setDimensionReferenceVisibility } from '../core/annotations/dimension-layer.js';
 import { getCatConstructionLayer, setCatConstructionLayerVisibility } from '../core/annotations/cat-construction-layer.js';
+import { getCatDimensionLayer, setCatDimensionLayerVisibility } from '../core/annotations/cat-dimension-layer.js';
 import { getDeckingLayer, setDeckingLayerVisibility } from '../core/annotations/decking-layer.js';
 import { getGridLayer, setGridLayerVisibility } from '../core/annotations/grid-layer.js';
 import { getRailingLayer, setRailingLayerVisibility } from '../core/annotations/railing-layer.js';
@@ -19,6 +20,7 @@ import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomView
 import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { deleteDeckAssembly } from '../tools/deck-boundary/delete-deck-assembly.js';
 import { clearDeckBoardingDirection, deriveDeckBoardingSegments, getDeckBoarding, rotateDeckBoardingDirection, setDeckBoardingDirection } from '../tools/deck-boarding/deck-boarding.js';
+import { CAT_LINE_TYPE, CAT_MEASUREMENT_TYPE, createCatLine, createCatMeasurement, deriveCatMeasurement, getCatLines, getCatMeasurements, getCatSnapObjects } from '../tools/cat-cl/cat-cl.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, materializeStairSideJunction, mergeStairBoundaryConnection, removeStairSideJunction, resolveStairHostEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
@@ -74,6 +76,10 @@ let utilityPanel = null;
 let projectMenuOpen = false;
 let exportMenuOpen = false;
 let pendingProjectDeleteId = null;
+let catTool = 'line';
+let catDraft = null;
+let catPointer = null;
+let catSnapState = { type: 'none', label: 'Free', guides: [] };
 
 function loadProjectLibrary() {
   const savedLibrary = localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
@@ -177,7 +183,7 @@ function render() {
           <button class="tool-button ${mode === 'draw' ? 'active' : ''}" data-mode="draw" title="Draw a custom deck boundary"><span class="tool-icon">◇</span><span class="tool-label">Boundary</span></button>
           <button class="tool-button ${mode === 'stair' ? 'active' : ''}" data-mode="stair" title="Attach stairs to a boundary edge" ${!current ? 'disabled' : ''}><span class="tool-icon">▰</span><span class="tool-label">Stairs</span></button>
           <button class="tool-button ${mode === 'railing' ? 'active' : ''}" data-mode="railing" title="Add railing along a construction edge" ${!current ? 'disabled' : ''}><span class="tool-icon">╥</span><span class="tool-label">Railing</span></button>
-          <button class="tool-button ${mode === 'level-down' ? 'active' : ''}" data-mode="level-down" title="Add a level-down construction line" ${!current ? 'disabled' : ''}><span class="tool-icon">↘</span><span class="tool-label">Level down</span></button>
+          <button class="tool-button ${mode === 'cat' ? 'active' : ''}" data-mode="cat" title="Create CAT construction references and field measurements"><span class="tool-icon">⌁</span><span class="tool-label">CAT CL</span></button>
           <div class="tool-spacer"></div>
           <button class="tool-button ${utilityPanel === 'visibility' ? 'active' : ''}" data-action="toggle-visibility-panel" title="Drawing layer visibility" aria-pressed="${utilityPanel === 'visibility'}"><span class="tool-icon">◉</span><span class="tool-label">Visibility</span></button>
           <button class="tool-button ${utilityPanel === 'snap' ? 'active' : ''}" data-action="toggle-snap-panel" title="Snap and precision controls" aria-pressed="${utilityPanel === 'snap'}"><span class="tool-icon">⌁</span><span class="tool-label">Snap</span></button>
@@ -194,7 +200,8 @@ function render() {
             ${draft.length >= 3 ? '<button class="button primary" data-action="complete-draft">Close boundary</button>' : ''}
             ${mode === 'level-down' ? '<button class="button primary" data-action="cancel-level-down">Cancel Level Down</button>' : ''}
           </div>
-          <svg class="model-canvas ${mode === 'draw' || mode === 'level-down' ? 'drawing' : ''} ${boardingDirectionMode ? 'board-direction' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
+          ${renderCatToolbar()}
+          <svg class="model-canvas ${mode === 'draw' || mode === 'level-down' || mode === 'cat' ? 'drawing' : ''} ${mode === 'cat' ? 'cat' : ''} ${boardingDirectionMode ? 'board-direction' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
           <div class="cursor-hud" aria-live="polite"><div class="hud-row"><span>Length</span><strong data-hud-length>—</strong></div><div class="hud-row"><span>Angle</span><strong data-hud-angle>—</strong></div><div class="hud-row snap"><span data-hud-snap-dot></span><strong data-hud-snap>Grid</strong></div><div class="hud-input" data-hud-input>Type a length</div></div>
           <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span><span class="stair-live-run"><b data-stair-live-run>—</b> total run</span></div><small data-stair-live-status>Release to build · 5″–7.5″ risers · 10″–11″ treads</small></div>
           ${renderUtilityPopover()}
@@ -226,7 +233,15 @@ function renderExportMenu() {
 }
 
 function renderContextPanel(current) {
-  if (!selected.kind || !current) return '';
+  if (!selected.kind) return '';
+  if (selected.kind === 'cat') {
+    const object = documentModel.objects.find((entry) => entry.id === selected.id && [CAT_LINE_TYPE, CAT_MEASUREMENT_TYPE].includes(entry.type));
+    if (!object) return '';
+    const measurement = object.type === CAT_MEASUREMENT_TYPE ? deriveCatMeasurement(object) : null;
+    const title = measurement ? formatFeetInches(measurement.pointToPointDistance) : formatFeetInches(Math.hypot(object.vertices[1].x - object.vertices[0].x, object.vertices[1].y - object.vertices[0].y));
+    return `<section class="context-object-panel cat-context"><div class="context-heading"><div><div class="eyebrow">${measurement ? 'CAT measuring tape' : 'CAT construction line'}</div><h2>${title}</h2></div><button class="context-close" data-action="clear-selection" aria-label="Close object options">×</button></div>${measurement ? `<div class="cat-measure-summary"><span><small>Horizontal</small><strong>${formatFeetInches(measurement.horizontalDistance)}</strong></span><span><small>Vertical</small><strong>${formatFeetInches(measurement.verticalDistance)}</strong></span><span><small>Point to point</small><strong>${formatFeetInches(measurement.pointToPointDistance)}</strong></span></div>` : '<div class="context-note">CAT reference geometry remains separate from authoritative construction objects and is available to Boundary snap.</div>'}<div class="context-actions"><button class="button" data-action="toggle-cat-construction-lines">${getCatConstructionLayer(documentModel).visible ? 'Hide CAT CL' : 'Show CAT CL'}</button><button class="button danger" data-action="delete-cat-object">Delete</button></div></section>`;
+  }
+  if (!current) return '';
   const deckingVisible = getDeckingLayer(documentModel).visible;
   const close = '<button class="context-close" data-action="clear-selection" aria-label="Close object options">×</button>';
   if (selected.kind === 'railing') {
@@ -327,18 +342,25 @@ function renderUtilityPopover() {
   return `<div class="utility-popover ${utilityPanel}" role="dialog" aria-label="${utilityPanel === 'visibility' ? 'Drawing layer visibility' : 'Snap controls'}"><button class="utility-close" data-action="close-utility-panel" aria-label="Close panel">×</button><div class="utility-popover-body">${content}</div></div>`;
 }
 
+function renderCatToolbar() {
+  if (mode !== 'cat') return '';
+  const dimensionsVisible = getCatDimensionLayer(documentModel).visible;
+  return `<div class="cat-toolbar" role="toolbar" aria-label="CAT construction tools"><div class="cat-toolbar-title"><strong>CAT CL</strong><small>${catDraft ? 'Choose the second point' : 'Reference geometry'}</small></div><button class="button ${catTool === 'line' ? 'primary' : 'ghost'}" data-action="cat-tool-line" aria-pressed="${catTool === 'line'}"><span>╱</span> Line</button><button class="button ${catTool === 'measure' ? 'primary' : 'ghost'}" data-action="cat-tool-measure" aria-pressed="${catTool === 'measure'}"><span>↔</span> Measuring tape</button><button class="button ${dimensionsVisible ? 'active-constraint' : 'ghost'}" data-action="toggle-cat-dimensions" aria-pressed="${dimensionsVisible}">${dimensionsVisible ? '◉' : '○'} CAT dimensions</button><button class="button ghost" data-action="close-cat-tool">Done</button></div>`;
+}
+
 function renderVisibilityControls() {
   const dimensionsVisible = getDimensionLayer(documentModel).visible;
   const railingLayer = getRailingLayer(documentModel);
   const catConstructionLayer = getCatConstructionLayer(documentModel);
+  const catDimensionLayer = getCatDimensionLayer(documentModel);
   const deckingLayer = getDeckingLayer(documentModel);
   const gridLayer = getGridLayer(documentModel);
-  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill and board pattern</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${catConstructionLayer.visible ? '◉' : '○'}</span><span><strong>CAT construction lines</strong><small>Future CAT reference and construction geometry</small></span><input id="cat-construction-visible" type="checkbox" ${catConstructionLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${gridLayer.visible ? '◉' : '○'}</span><span><strong>Construction grid</strong><small>Visual guide · snap remains independent</small></span><input id="grid-visible" type="checkbox" ${gridLayer.visible ? 'checked' : ''}></label></section>`;
+  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill and board pattern</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${catConstructionLayer.visible ? '◉' : '○'}</span><span><strong>CAT construction lines</strong><small>Yellow reference geometry for future construction</small></span><input id="cat-construction-visible" type="checkbox" ${catConstructionLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${catDimensionLayer.visible ? '◉' : '○'}</span><span><strong>CAT dimensions</strong><small>Secondary horizontal, vertical, and direct measurements</small></span><input id="cat-dimensions-visible" type="checkbox" ${catDimensionLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${gridLayer.visible ? '◉' : '○'}</span><span><strong>Construction grid</strong><small>Visual guide · snap remains independent</small></span><input id="grid-visible" type="checkbox" ${gridLayer.visible ? 'checked' : ''}></label></section>`;
 }
 
 function renderSnapControls() {
   const snapSettings = getSnapSettings(documentModel);
-  return `<section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Inference guides align new geometry to nearby nodes without creating permanent constraints.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${snapSettings.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${snapSettings.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><label class="snap-option"><input id="snap-node-inference" type="checkbox" ${snapSettings.nodeInference ? 'checked' : ''}><span><strong>Node inference</strong><small>Horizontal and vertical references</small></span><kbd>N</kbd></label><label class="snap-option"><input id="snap-diagonal-inference" type="checkbox" ${snapSettings.diagonalInference ? 'checked' : ''} ${snapSettings.nodeInference ? '' : 'disabled'}><span><strong>45° inference</strong><small>Diagonal references from nearby nodes</small></span><kbd>45°</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
+  return `<section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Inference guides align new geometry to nearby nodes without creating permanent constraints.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${snapSettings.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry and CAT CL</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${snapSettings.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><label class="snap-option"><input id="snap-node-inference" type="checkbox" ${snapSettings.nodeInference ? 'checked' : ''}><span><strong>Node inference</strong><small>Horizontal and vertical references</small></span><kbd>N</kbd></label><label class="snap-option"><input id="snap-diagonal-inference" type="checkbox" ${snapSettings.diagonalInference ? 'checked' : ''} ${snapSettings.nodeInference ? '' : 'disabled'}><span><strong>Angled inference</strong><small>22.5° and 45° references from nearby nodes</small></span><kbd>22.5°</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
 }
 
 function renderInspector(current, validation) {
@@ -646,7 +668,62 @@ function drawCanvas(svg, current, validation) {
       if (chamferDraft) renderChamferDimension(svg, chamferDraft);
     }
   }
+  renderCatGraphics(svg);
   if (draft.length) renderDraft(svg);
+}
+
+function renderCatGraphics(svg) {
+  if (getCatConstructionLayer(documentModel).visible) {
+    getCatLines(documentModel).forEach((line) => {
+      const [start, end] = line.vertices;
+      const selectedClass = selected.kind === 'cat' && selected.id === line.id ? 'selected' : '';
+      svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `cat-line ${selectedClass}` }));
+      svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'cat-line-hit', 'data-cat-object-id': line.id }));
+      [start, end].forEach((point) => svg.append(svgElement('circle', { cx: point.x, cy: point.y, r: Math.max(1.7, viewport.width / 360), class: `cat-node ${selectedClass}` })));
+    });
+  }
+  if (getCatDimensionLayer(documentModel).visible) getCatMeasurements(documentModel).forEach((measurement) => renderCatMeasurement(svg, measurement, false));
+  if (mode === 'cat' && catDraft?.start && catPointer) {
+    if (catSnapState.guides.includes('vertical')) svg.append(svgElement('line', { x1: catPointer.x, y1: viewport.y, x2: catPointer.x, y2: viewport.y + viewport.height, class: 'cat-guide-line' }));
+    if (catSnapState.guides.includes('horizontal')) svg.append(svgElement('line', { x1: viewport.x, y1: catPointer.y, x2: viewport.x + viewport.width, y2: catPointer.y, class: 'cat-guide-line' }));
+    if (catSnapState.inference) renderNodeInferenceGuide(svg, catSnapState.inference, catPointer, Math.max(2.8, viewport.width / 150));
+    if (catTool === 'measure') renderCatMeasurement(svg, { id: 'cat-preview', start: catDraft.start, end: catPointer }, true);
+    else {
+      svg.append(svgElement('line', { x1: catDraft.start.x, y1: catDraft.start.y, x2: catPointer.x, y2: catPointer.y, class: 'cat-line preview' }));
+      svg.append(svgElement('circle', { cx: catPointer.x, cy: catPointer.y, r: Math.max(2.2, viewport.width / 280), class: 'cat-snap-marker' }));
+    }
+  }
+}
+
+function renderCatMeasurement(svg, measurement, preview) {
+  const derived = deriveCatMeasurement(measurement);
+  const { start, end } = measurement;
+  const selectedClass = !preview && selected.kind === 'cat' && selected.id === measurement.id ? 'selected' : '';
+  const shared = `${preview ? 'preview' : ''} ${selectedClass}`;
+  svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: derived.corner.x, y2: derived.corner.y, class: `cat-measure-leg ${shared}` }));
+  svg.append(svgElement('line', { x1: derived.corner.x, y1: derived.corner.y, x2: end.x, y2: end.y, class: `cat-measure-leg ${shared}` }));
+  svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: `cat-measure-direct ${shared}` }));
+  if (!preview) svg.append(svgElement('line', { x1: start.x, y1: start.y, x2: end.x, y2: end.y, class: 'cat-measure-line-hit', 'data-cat-object-id': measurement.id }));
+  const horizontalPoint = { x: (start.x + derived.corner.x) / 2, y: start.y - 5 };
+  const verticalPoint = { x: end.x + 7, y: (derived.corner.y + end.y) / 2 };
+  const length = derived.pointToPointDistance || 1;
+  const normal = { x: -(end.y - start.y) / length, y: (end.x - start.x) / length };
+  const directPoint = { x: derived.midpoint.x + normal.x * 11, y: derived.midpoint.y + normal.y * 11 };
+  renderCatMeasurementLabel(svg, horizontalPoint, `H ${formatFeetInches(derived.horizontalDistance)}`, measurement.id, shared);
+  renderCatMeasurementLabel(svg, verticalPoint, `V ${formatFeetInches(derived.verticalDistance)}`, measurement.id, shared);
+  renderCatMeasurementLabel(svg, directPoint, `↗ ${formatFeetInches(derived.pointToPointDistance)}`, measurement.id, shared);
+  [start, end].forEach((point) => svg.append(svgElement('circle', { cx: point.x, cy: point.y, r: Math.max(1.8, viewport.width / 350), class: `cat-measure-node ${shared}` })));
+}
+
+function renderCatMeasurementLabel(svg, point, label, referenceId, className) {
+  const width = Math.max(28, label.length * 3.2);
+  const group = svgElement('g', { class: `cat-measure-label ${className}` });
+  group.append(svgElement('rect', { x: point.x - width / 2 - 3, y: point.y - 7, width: width + 6, height: 14, rx: 4, class: 'cat-measure-hit', 'data-cat-object-id': referenceId }));
+  group.append(svgElement('rect', { x: point.x - width / 2, y: point.y - 5.5, width, height: 11, rx: 3, class: 'cat-measure-bg', 'data-cat-object-id': referenceId }));
+  const text = svgElement('text', { x: point.x, y: point.y + 1, class: 'cat-measure-text' });
+  text.textContent = label;
+  group.append(text);
+  svg.append(group);
 }
 
 function renderStairGraphics(svg, current) {
@@ -1129,6 +1206,11 @@ function bindEvents() {
     message = `CAT construction lines ${catConstructionVisibility.checked ? 'shown' : 'hidden'}`;
     commit(setCatConstructionLayerVisibility(documentModel, catConstructionVisibility.checked), 'Toggle CAT construction lines');
   });
+  const catDimensionsVisibility = app.querySelector('#cat-dimensions-visible');
+  if (catDimensionsVisibility) catDimensionsVisibility.addEventListener('change', () => {
+    message = `CAT dimensions ${catDimensionsVisibility.checked ? 'shown' : 'hidden'}`;
+    commit(setCatDimensionLayerVisibility(documentModel, catDimensionsVisibility.checked), 'Toggle CAT dimensions');
+  });
   const deckingVisibility = app.querySelector('#decking-visible');
   if (deckingVisibility) deckingVisibility.addEventListener('change', () => {
     message = `Decking layer ${deckingVisibility.checked ? 'shown' : 'hidden'}`;
@@ -1151,7 +1233,7 @@ function bindEvents() {
   });
   const diagonalInference = app.querySelector('#snap-diagonal-inference');
   if (diagonalInference) diagonalInference.addEventListener('change', () => {
-    message = `45-degree node inference ${diagonalInference.checked ? 'enabled' : 'disabled'}`;
+    message = `22.5° and 45° node inference ${diagonalInference.checked ? 'enabled' : 'disabled'}`;
     commit(setSnapSettings(documentModel, { diagonalInference: diagonalInference.checked }), 'Update diagonal inference settings');
   });
   const railingSystem = app.querySelector('#quick-railing-system');
@@ -1190,6 +1272,7 @@ function setMode(nextMode) {
   stairSideGesture = null;
   railingGesture = null;
   railingDraft = null;
+  if (nextMode !== 'cat') { catDraft = null; catPointer = null; }
   if (nextMode !== 'level-down') { levelDownDraft = []; levelDownPointer = null; }
   if (mode !== 'stair') stairDraft = null;
   if (mode !== 'draw') { draft = []; pointerWorld = null; message = 'Ready'; }
@@ -1201,6 +1284,15 @@ function setMode(nextMode) {
       persist();
     }
     message = 'Press an edge, corner, or grid point and drag to another snap target';
+  }
+  if (mode === 'cat') {
+    let next = documentModel;
+    if (!getCatConstructionLayer(next).visible) next = setCatConstructionLayerVisibility(next, true);
+    if (!getCatDimensionLayer(next).visible) next = setCatDimensionLayerVisibility(next, true);
+    if (next !== documentModel) { documentModel = next; persist(); }
+    catDraft = null;
+    catPointer = null;
+    message = catTool === 'measure' ? 'Measuring tape · choose the first point' : 'CAT Line · choose the first point';
   }
   if (mode === 'level-down') message = 'Click a boundary edge or corner to start Level Down';
   render();
@@ -1214,6 +1306,7 @@ function canvasPointerDown(svg, event) {
   const dimensionId = event.target.dataset.dimensionId;
   const railingId = event.target.dataset.railingId;
   const levelDownSegmentId = event.target.dataset.levelDownSegmentId;
+  const catObjectId = event.target.dataset.catObjectId;
   const targetBoundaryId = event.target.dataset.boundaryId ?? boundaryForReference(vertexId ?? edgeId ?? dimensionId ?? levelDownSegmentId)?.id;
   if (moveBoundaryMode && event.button === 0) {
     event.preventDefault();
@@ -1225,6 +1318,11 @@ function canvasPointerDown(svg, event) {
     return;
   }
   activateBoundary(targetBoundaryId);
+  if (mode === 'cat' && event.button === 0) {
+    event.preventDefault();
+    placeCatPoint(screenToWorld(svg, event), event.pointerType);
+    return;
+  }
   if (boardingDirectionMode && event.button === 0) {
     event.preventDefault();
     const line = resolveBoardingReference({ edgeId, stairEdgeId, stairSideReferenceId, levelDownSegmentId, railingId });
@@ -1262,7 +1360,7 @@ function canvasPointerDown(svg, event) {
     drawCanvasRefresh();
     return;
   }
-  if (event.pointerType === 'touch' && !['railing', 'level-down'].includes(mode) && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || stairSideReferenceId || dimensionId || railingId || levelDownSegmentId)) || (mode === 'stair' && edgeId))) {
+  if (event.pointerType === 'touch' && !['railing', 'level-down', 'cat'].includes(mode) && !((mode === 'select' && (vertexId || edgeId || stairEdgeId || stairSideReferenceId || dimensionId || railingId || levelDownSegmentId || catObjectId)) || (mode === 'stair' && edgeId))) {
     event.preventDefault();
     activeTouches.set(event.pointerId, { x: event.clientX, y: event.clientY });
     svg.setPointerCapture(event.pointerId);
@@ -1300,6 +1398,12 @@ function canvasPointerDown(svg, event) {
     selected = { kind: 'dimension', id: dimensionId };
     dimensionDragStart = { pointerId: event.pointerId, document: documentModel, point: screenToWorld(svg, event), offset: getDimensionOffset(documentModel, dimensionId), moved: false };
     svg.setPointerCapture(event.pointerId);
+    return;
+  }
+  if (mode === 'select' && catObjectId) {
+    selected = { kind: 'cat', id: catObjectId };
+    message = 'CAT reference selected';
+    render();
     return;
   }
   if (mode === 'select' && railingId) {
@@ -1444,6 +1548,32 @@ function placeDraftPoint(raw, pointerType = 'mouse') {
   render();
 }
 
+function placeCatPoint(raw, pointerType = 'mouse') {
+  const snapped = snapForPointer(raw, catDraft?.start ?? null, [], new Set(), pointerType);
+  catSnapState = snapped;
+  if (!catDraft?.start) {
+    catDraft = { start: snapped.point };
+    catPointer = snapped.point;
+    message = `${snapped.label} · choose the second point`;
+    render();
+    return;
+  }
+  try {
+    const object = catTool === 'measure'
+      ? createCatMeasurement(catDraft.start, snapped.point)
+      : createCatLine(catDraft.start, snapped.point);
+    message = catTool === 'measure'
+      ? `${formatFeetInches(deriveCatMeasurement(object).pointToPointDistance)} point-to-point measurement added`
+      : `${formatFeetInches(Math.hypot(snapped.point.x - catDraft.start.x, snapped.point.y - catDraft.start.y))} CAT line added · continue or press Escape`;
+    catDraft = catTool === 'line' ? { start: snapped.point } : null;
+    catPointer = catTool === 'line' ? snapped.point : null;
+    commit(upsertObject(documentModel, object), catTool === 'measure' ? 'Add CAT measuring tape' : 'Add CAT construction line');
+  } catch (error) {
+    message = error.message;
+    render();
+  }
+}
+
 function updateChamferDraft(raw) {
   const source = chamferGesture?.document.objects.find((object) => object.type === 'deck-boundary');
   const corner = source?.vertices.find((vertex) => vertex.id === chamferGesture?.vertexId);
@@ -1525,6 +1655,14 @@ function canvasPointerMove(svg, event) {
     return;
   }
   const raw = screenToWorld(svg, event);
+  if (mode === 'cat' && catDraft?.start) {
+    catSnapState = snapForPointer(raw, catDraft.start, [], new Set(), event.pointerType);
+    catPointer = catSnapState.point;
+    message = `${catSnapState.label} · ${catTool === 'measure' ? 'horizontal, vertical, and point-to-point preview' : 'click to place CAT line'}`;
+    drawCanvasRefresh();
+    updateStatusMessage();
+    return;
+  }
   if (moveBoundaryGesture?.pointerId === event.pointerId) {
     try {
       documentModel = translateDeckAssembly(moveBoundaryGesture.document, moveBoundaryGesture.boundaryId, { x: raw.x - moveBoundaryGesture.start.x, y: raw.y - moveBoundaryGesture.start.y });
@@ -2046,7 +2184,8 @@ function resolveRailingSnap(raw) {
 }
 
 function snapForPointer(raw, anchor, extraVertices = [], excludedIds = new Set(), pointerType = 'mouse') {
-  const objects = boundaries();
+  const catSnapObjects = getCatConstructionLayer(documentModel).visible ? getCatSnapObjects(documentModel) : [];
+  const objects = [...boundaries(), ...catSnapObjects];
   const settings = getSnapSettings(documentModel);
   const draftObject = { vertices: [...draft, ...extraVertices], edges: [] };
   const worldPerPixel = viewport.width / Math.max(app.querySelector('.model-canvas')?.clientWidth ?? 1000, 1);
@@ -2059,6 +2198,7 @@ function snapForPointer(raw, anchor, extraVertices = [], excludedIds = new Set()
     inferenceReleaseMultiplier: 1.45,
     maxInferenceReferenceDistance: Math.hypot(viewport.width, viewport.height) * .8,
     angleToleranceRadians: (isTouch ? 5 : 4) * Math.PI / 180,
+    angleIncrementRadians: Math.PI / 8,
     grid: gridSetting === 'auto' ? .5 : Number(gridSetting),
     gridEnabled: settings.grid,
     edgesEnabled: settings.edges,
@@ -2095,7 +2235,11 @@ function animateViewport(target) {
 }
 
 function fitProject(svg = app.querySelector('.model-canvas')) {
-  const points = [...boundaries().flatMap((entry) => entry.vertices), ...draft];
+  const catPoints = [
+    ...getCatLines(documentModel).flatMap((line) => line.vertices),
+    ...getCatMeasurements(documentModel).flatMap((measurement) => [measurement.start, measurement.end]),
+  ];
+  const points = [...boundaries().flatMap((entry) => entry.vertices), ...catPoints, ...draft];
   const aspect = (svg?.clientWidth || 1000) / (svg?.clientHeight || 700);
   animateViewport(fitViewport(points, aspect));
   message = points.length ? 'Project fitted to workspace' : 'Workspace reset';
@@ -2573,6 +2717,41 @@ function handleAction(action, source = null) {
     message = `Railing layer ${visible ? 'shown' : 'hidden'}`;
     commit(setRailingLayerVisibility(documentModel, visible), 'Toggle Railing layer');
   }
+  if (action === 'cat-tool-line') {
+    catTool = 'line';
+    catDraft = null;
+    catPointer = null;
+    setMode('cat');
+    return;
+  }
+  if (action === 'cat-tool-measure') {
+    catTool = 'measure';
+    catDraft = null;
+    catPointer = null;
+    setMode('cat');
+    return;
+  }
+  if (action === 'toggle-cat-dimensions') {
+    const visible = !getCatDimensionLayer(documentModel).visible;
+    message = `CAT dimensions ${visible ? 'shown' : 'hidden'}`;
+    commit(setCatDimensionLayerVisibility(documentModel, visible), 'Toggle CAT dimensions');
+  }
+  if (action === 'close-cat-tool') {
+    catDraft = null;
+    catPointer = null;
+    mode = 'select';
+    message = 'CAT CL closed · reference geometry remains available for snap';
+    render();
+    return;
+  }
+  if (action === 'delete-cat-object' && selected.kind === 'cat') {
+    const removed = documentModel.objects.find((object) => object.id === selected.id);
+    if (!removed) return;
+    const next = { ...documentModel, objects: documentModel.objects.filter((object) => object.id !== selected.id) };
+    selected = { kind: null, id: null };
+    message = removed.type === CAT_MEASUREMENT_TYPE ? 'CAT measurement removed' : 'CAT construction line removed';
+    commit(next, 'Delete CAT object');
+  }
   if (action === 'toggle-cat-construction-lines') {
     const visible = !getCatConstructionLayer(documentModel).visible;
     message = `CAT construction lines ${visible ? 'shown' : 'hidden'}`;
@@ -2621,6 +2800,9 @@ function resetProjectWorkspaceState() {
   stairDraft = null;
   railingDraft = null;
   levelDownDraft = [];
+  catDraft = null;
+  catPointer = null;
+  catSnapState = { type: 'none', label: 'Free', guides: [] };
   utilityPanel = null;
   exportMenuOpen = false;
   pendingDeckDeleteId = null;
@@ -2850,6 +3032,19 @@ window.addEventListener('keydown', (event) => {
     else mode = 'select';
     pointerWorld = draft.at(-1) ?? null;
     message = mode === 'draw' ? 'Last sketch step canceled' : 'Drawing canceled'; render();
+  }
+  if (event.key === 'Escape' && mode === 'cat') {
+    event.preventDefault();
+    if (catDraft?.start) {
+      catDraft = null;
+      catPointer = null;
+      message = `${catTool === 'measure' ? 'Measuring tape' : 'CAT Line'} · choose the first point`;
+    } else {
+      mode = 'select';
+      message = 'CAT CL closed';
+    }
+    render();
+    return;
   }
   if (event.key === 'Escape' && mode === 'level-down') {
     event.preventDefault();

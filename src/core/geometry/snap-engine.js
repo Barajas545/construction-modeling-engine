@@ -1,19 +1,21 @@
 import { distance, nearestPointOnSegment } from './vector.js';
 
 const priority = { endpoint: 0, 'node-intersection': 1, 'node-inference': 2, midpoint: 3, alignment: 4, angle: 5, edge: 6, grid: 7, none: 99 };
-const INFERENCE_ANGLES = [0, Math.PI / 2, Math.PI / 4, Math.PI * 3 / 4];
+const INFERENCE_ANGLES = Array.from({ length: 8 }, (_, index) => index * Math.PI / 8);
 const EPSILON = 1e-8;
 
 export function collectSnapTargets(objects = []) {
   const targets = [];
   objects.forEach((object) => {
-    object.vertices?.forEach((vertex) => targets.push({ type: 'endpoint', point: vertex, referenceId: vertex.id }));
+    const sourcePriority = Number(object.snapPriority ?? 0);
+    const prefix = object.snapSource === 'cat' ? 'CAT ' : '';
+    object.vertices?.forEach((vertex) => targets.push({ type: 'endpoint', point: vertex, referenceId: vertex.id, sourcePriority, label: `${prefix}node` }));
     object.edges?.forEach((edge, index) => {
       const start = object.vertices[index];
       const end = object.vertices[(index + 1) % object.vertices.length];
       if (!start || !end) return;
-      targets.push({ type: 'midpoint', point: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }, referenceId: edge.id });
-      targets.push({ type: 'edge', start, end, referenceId: edge.id });
+      targets.push({ type: 'midpoint', point: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }, referenceId: edge.id, sourcePriority, label: `${prefix}midpoint` });
+      targets.push({ type: 'edge', start, end, referenceId: edge.id, sourcePriority, label: `${prefix}edge` });
     });
   });
   return targets;
@@ -42,10 +44,10 @@ export function resolveSnap(candidate, context = {}) {
     if (Math.abs(dx) <= tolerance) candidates.push({ type: 'alignment', relation: 'Vertical', point: { x: anchor.x, y: candidate.y }, distance: Math.abs(dx), guides: ['vertical'] });
     if (length > 0) {
       const angle = Math.atan2(dy, dx);
-      const increment = Math.PI / 4;
+      const increment = context.angleIncrementRadians ?? Math.PI / 4;
       const lockedAngle = Math.round(angle / increment) * increment;
       const angularOffset = Math.abs(Math.atan2(Math.sin(angle - lockedAngle), Math.cos(angle - lockedAngle)));
-      if (angularOffset <= 4 * Math.PI / 180) candidates.push({ type: 'angle', relation: `${Math.round(lockedAngle * 180 / Math.PI)}°`, point: { x: anchor.x + Math.cos(lockedAngle) * length, y: anchor.y + Math.sin(lockedAngle) * length }, distance: angularOffset * length, guides: ['angle'] });
+      if (angularOffset <= 4 * Math.PI / 180) candidates.push({ type: 'angle', relation: preciseAngleLabel(lockedAngle), point: { x: anchor.x + Math.cos(lockedAngle) * length, y: anchor.y + Math.sin(lockedAngle) * length }, distance: angularOffset * length, guides: ['angle'] });
       if (context.nodeInference !== false) {
         addNodeInferenceCandidates(candidates, candidate, anchor, lockedAngle, angularOffset, context);
       }
@@ -53,9 +55,9 @@ export function resolveSnap(candidate, context = {}) {
   }
   if (context.gridEnabled !== false) candidates.push({ type: 'grid', point: { x: Math.round(candidate.x / grid) * grid, y: Math.round(candidate.y / grid) * grid }, distance: 0 });
   else candidates.push({ type: 'none', point: { ...candidate }, distance: 0 });
-  candidates.sort((a, b) => priority[a.type] - priority[b.type] || a.distance - b.distance);
+  candidates.sort((a, b) => priority[a.type] - priority[b.type] || (a.sourcePriority ?? 0) - (b.sourcePriority ?? 0) || a.distance - b.distance);
   const result = candidates[0];
-  return { point: result.point, type: result.type, label: result.relation ?? snapLabel(result.type), guides: result.guides ?? [], referenceId: result.referenceId ?? null, inference: result.inference ?? null };
+  return { point: result.point, type: result.type, label: result.relation ?? result.label ?? snapLabel(result.type), guides: result.guides ?? [], referenceId: result.referenceId ?? null, inference: result.inference ?? null };
 }
 
 function addNodeInferenceCandidates(candidates, candidate, anchor, lockedAngle, angularOffset, context) {
@@ -119,11 +121,18 @@ function normalizedDegrees(angle) {
   return ((degrees % 360) + 360) % 360;
 }
 
+function preciseAngleLabel(angle) {
+  const degrees = angle * 180 / Math.PI;
+  const rounded = Math.round(degrees * 2) / 2;
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}°`;
+}
+
 function guideLabel(angle) {
-  const degrees = normalizedDegrees(angle) % 180;
-  if (degrees === 0) return 'Horizontal';
-  if (degrees === 90) return 'Vertical';
-  return `${degrees}°`;
+  const degrees = ((angle * 180 / Math.PI) % 180 + 180) % 180;
+  if (Math.abs(degrees) < EPSILON) return 'Horizontal';
+  if (Math.abs(degrees - 90) < EPSILON) return 'Vertical';
+  const rounded = Math.round(degrees * 2) / 2;
+  return `${Number.isInteger(rounded) ? rounded.toFixed(0) : rounded.toFixed(1)}°`;
 }
 
 function angleLabel(angle) {

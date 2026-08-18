@@ -37,6 +37,31 @@ test('snap engine prioritizes construction endpoints over the grid', () => {
   assert.equal(snap.referenceId, 'a');
 });
 
+test('snap engine supports 22.5 degree CAT and Boundary inference', () => {
+  const length = 100;
+  const angle = 22 * Math.PI / 180;
+  const result = resolveSnap({ x: Math.cos(angle) * length, y: Math.sin(angle) * length }, {
+    anchor: { x: 0, y: 0 },
+    angleIncrementRadians: Math.PI / 8,
+    gridEnabled: false,
+    edgesEnabled: false,
+    angleToleranceRadians: 4 * Math.PI / 180,
+  });
+  assert.equal(result.type, 'angle');
+  assert.equal(result.label, '22.5°');
+  assert.ok(Math.abs(Math.atan2(result.point.y, result.point.x) * 180 / Math.PI - 22.5) < .01);
+});
+
+test('construction nodes win over CAT nodes at the same location', () => {
+  const targets = collectSnapTargets([
+    { vertices: [{ id: 'cat-node', x: 10, y: 10 }], snapSource: 'cat', snapPriority: 1 },
+    { vertices: [{ id: 'construction-node', x: 10, y: 10 }] },
+  ]);
+  const result = resolveSnap({ x: 10, y: 10 }, { targets, gridEnabled: false });
+  assert.equal(result.referenceId, 'construction-node');
+  assert.equal(result.label, 'node');
+});
+
 test('node inference combines the active line direction with a nearby node reference', () => {
   const targets = [{ type: 'endpoint', point: { x: 80, y: 0 }, referenceId: 'reference-node' }];
   const snap = resolveSnap({ x: 80.8, y: 100.8 }, {
