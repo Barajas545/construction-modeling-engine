@@ -8,3 +8,4 @@ Release notes and milestone summaries belong here. Entries should describe user-
 - [Professional node inference](./2026-08-17-node-inference.md) — Implemented.
 - [Progressive Model panel temporarily removed](./2026-08-18-progress-panel-removed.md) — Implemented.
 - [Project totals moved to the top bar](./2026-08-18-project-totals-topbar.md) — Implemented.
+- [Dimension Annotation panel removed](./2026-08-18-remove-dimension-annotation-panel.md) — Implemented.

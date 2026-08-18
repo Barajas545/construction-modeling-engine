@@ -293,7 +293,6 @@ function renderInspector(current, validation) {
   const selectedVertex = selected.kind === 'vertex' ? current.vertices.find((vertex) => vertex.id === selected.id) : null;
   const selectedStair = selected.kind === 'stair' ? documentModel.objects.find((object) => object.type === 'stair' && object.id === selected.id) : null;
   const selectedStairEdge = selected.kind === 'stair-edge' ? findStairInterfaceByEdgeId(selected.id) : null;
-  const selectedDimension = selected.kind === 'dimension' ? resolveDimensionReference(selected.id) : null;
   const selectedRailing = selected.kind === 'railing' ? findRailingGeometry(selected.id) : null;
   const firstIssue = validation.issues[0];
   return `
@@ -303,7 +302,6 @@ function renderInspector(current, validation) {
     ${selectedStair ? renderStairObjectInspector(selectedStair) : ''}
     ${selectedStairEdge ? renderStairInterfaceInspector(current, selectedStairEdge.stair, selectedStairEdge.edge) : ''}
     ${selectedRailing ? renderRailingInspector(selectedRailing) : ''}
-    ${selectedDimension ? renderDimensionInspector(selectedDimension) : ''}
     ${selectedVertex ? `<section class="inspector-section"><div class="eyebrow">Selected corner</div><h2>Geometry corner</h2><p class="section-copy">Drag freely, or place this corner over a neighboring corner to merge them and remove the redundant edge.</p><div class="vertex-guidance"><span class="merge-symbol"></span><span>Neighboring corners glow when a valid merge is available.</span></div><div class="action-stack"><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Remove corner</button></div></section>` : ''}
     <section class="inspector-section"><div class="eyebrow">Project model</div><h2>Ready for future objects</h2><p class="section-copy">Edges and corners keep stable identities for house attachments, stairs, railings, fascia, framing, and takeoff.</p><div class="action-stack"><button class="button" data-action="new-boundary">Start over</button></div></section>`;
 }
@@ -321,10 +319,6 @@ function renderStairInterfaceInspector(current, stair, edge) {
   const properties = normalizeBoundaryEdge(edge).properties;
   const nodeControlled = stair.dimensions.snappedStart || stair.dimensions.snappedEnd;
   return `<section class="inspector-section edge-inspector stair-interface-panel"><div class="object-status"><div><div class="eyebrow">Deck–Stair interface</div><h2>${formatFeetInches(length)}</h2></div><span class="object-badge established">${nodeControlled ? 'Node snapped' : 'Selectable edge'}</span></div><p class="section-copy">${nodeControlled ? 'The stair side is attached to an adjacent construction node. Move that shared node to change the opening while preserving the snap.' : 'This is the construction line where the staircase meets the deck. Assign finishes here without creating overlapping geometry.'}</p><div class="field-grid"><div class="field full"><label for="stair-interface-width">Exact opening width</label><div class="compound-field"><input id="stair-interface-width" value="${formatFeetInches(length)}" ${nodeControlled ? 'disabled' : ''}><button class="button" data-action="apply-stair-width" ${nodeControlled ? 'disabled' : ''}>Apply</button></div></div></div><div class="property-list"><label><input type="checkbox" data-edge-property="fascia" ${properties.finishes.fascia ? 'checked' : ''}><span><strong>Fascia</strong><small>Finish board at stair interface</small></span></label><label><input type="checkbox" data-edge-property="pictureFrame" ${properties.finishes.pictureFrame ? 'checked' : ''}><span><strong>Picture frame</strong><small>Decking board along opening</small></span></label><label><input type="checkbox" data-edge-property="demolition" ${properties.existingConditions.demolition ? 'checked' : ''}><span><strong>Demolition</strong><small>Existing interface to remove</small></span></label></div><div class="continuity-note">Owned by ${escapeHtml(stair.name)}</div></section>`;
-}
-
-function renderDimensionInspector(reference) {
-  return `<section class="inspector-section dimension-panel"><div class="eyebrow">Dimension annotation</div><h2>${escapeHtml(reference.label)}</h2><p class="section-copy">Drag this label anywhere in the workspace to reveal construction below it. Double-click it to edit the linked geometry when that operation is safe.</p><div class="action-stack"><button class="button" data-action="edit-dimension">Edit linked measurement</button><button class="button" data-action="reset-dimension-position">Reset label position</button></div></section>`;
 }
 
 function findStairInterfaceByEdgeId(edgeId) {
