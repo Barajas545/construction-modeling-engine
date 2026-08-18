@@ -5,6 +5,7 @@ import { deriveModelProgress } from '../core/construction-objects/progressive-mo
 import { getBoundaryLevelDown, getDeckBoundaries, getProjectSurfaceArea, setBoundaryLevelDown, translateDeckAssembly } from '../core/construction-objects/multi-deck-project.js';
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
 import { getDimensionLayer, getDimensionLeaderOffset, getDimensionOffset, isDimensionReferenceVisible, setDimensionLayerVisibility, setDimensionLeaderOffset, setDimensionOffset, setDimensionReferenceVisibility } from '../core/annotations/dimension-layer.js';
+import { getCatConstructionLayer, setCatConstructionLayerVisibility } from '../core/annotations/cat-construction-layer.js';
 import { getDeckingLayer, setDeckingLayerVisibility } from '../core/annotations/decking-layer.js';
 import { getGridLayer, setGridLayerVisibility } from '../core/annotations/grid-layer.js';
 import { getRailingLayer, setRailingLayerVisibility } from '../core/annotations/railing-layer.js';
@@ -156,6 +157,8 @@ function render() {
   const validation = current ? validateDeckBoundary(current) : null;
   const progress = deriveModelProgress(documentModel);
   const dimensionLayer = getDimensionLayer(documentModel);
+  const railingLayer = getRailingLayer(documentModel);
+  const catConstructionLayer = getCatConstructionLayer(documentModel);
   const projectSurface = getProjectSurfaceArea(documentModel);
   const deckAreaCount = boundaries().length;
   const railingSummary = analyzeRailingGeometries(getAllRailingGeometries());
@@ -185,9 +188,8 @@ function render() {
             <button class="button icon-button ghost" data-action="undo" aria-label="Undo" ${!history.canUndo ? 'disabled' : ''}>↶</button>
             <button class="button icon-button ghost" data-action="redo" aria-label="Redo" ${!history.canRedo ? 'disabled' : ''}>↷</button>
             <span class="divider"></span>
-            <button class="button ghost" data-mode="select">Edit corners</button>
-            <button class="button ${mode === 'draw' ? 'primary' : 'ghost'}" data-mode="draw">Draw outline</button>
-            ${current ? '<button class="button ghost" data-action="add-deck-boundary">+ Deck area</button>' : ''}
+            <button class="button ${railingLayer.visible ? 'active-constraint' : 'ghost'}" data-action="toggle-railing-visibility" aria-pressed="${railingLayer.visible}" title="Show or hide all railing construction objects">${railingLayer.visible ? '◉' : '○'} Railing</button>
+            <button class="button ${catConstructionLayer.visible ? 'active-constraint' : 'ghost'}" data-action="toggle-cat-construction-lines" aria-pressed="${catConstructionLayer.visible}" title="Show or hide future CAT construction lines">${catConstructionLayer.visible ? '◉' : '○'} CAT construction lines</button>
             <button class="button ${dimensionLayer.visible ? 'active-constraint' : 'ghost'}" data-action="toggle-dimensions" title="Show or hide the Dimensions layer">${dimensionLayer.visible ? '◉' : '○'} Dimensions</button>
             ${draft.length >= 3 ? '<button class="button primary" data-action="complete-draft">Close boundary</button>' : ''}
             ${mode === 'level-down' ? '<button class="button primary" data-action="cancel-level-down">Cancel Level Down</button>' : ''}
@@ -328,9 +330,10 @@ function renderUtilityPopover() {
 function renderVisibilityControls() {
   const dimensionsVisible = getDimensionLayer(documentModel).visible;
   const railingLayer = getRailingLayer(documentModel);
+  const catConstructionLayer = getCatConstructionLayer(documentModel);
   const deckingLayer = getDeckingLayer(documentModel);
   const gridLayer = getGridLayer(documentModel);
-  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill and board pattern</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${gridLayer.visible ? '◉' : '○'}</span><span><strong>Construction grid</strong><small>Visual guide · snap remains independent</small></span><input id="grid-visible" type="checkbox" ${gridLayer.visible ? 'checked' : ''}></label></section>`;
+  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill and board pattern</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${catConstructionLayer.visible ? '◉' : '○'}</span><span><strong>CAT construction lines</strong><small>Future CAT reference and construction geometry</small></span><input id="cat-construction-visible" type="checkbox" ${catConstructionLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${gridLayer.visible ? '◉' : '○'}</span><span><strong>Construction grid</strong><small>Visual guide · snap remains independent</small></span><input id="grid-visible" type="checkbox" ${gridLayer.visible ? 'checked' : ''}></label></section>`;
 }
 
 function renderSnapControls() {
@@ -1120,6 +1123,11 @@ function bindEvents() {
   if (railingVisibility) railingVisibility.addEventListener('change', () => {
     message = `Railing layer ${railingVisibility.checked ? 'shown' : 'hidden'}`;
     commit(setRailingLayerVisibility(documentModel, railingVisibility.checked), 'Toggle Railing layer');
+  });
+  const catConstructionVisibility = app.querySelector('#cat-construction-visible');
+  if (catConstructionVisibility) catConstructionVisibility.addEventListener('change', () => {
+    message = `CAT construction lines ${catConstructionVisibility.checked ? 'shown' : 'hidden'}`;
+    commit(setCatConstructionLayerVisibility(documentModel, catConstructionVisibility.checked), 'Toggle CAT construction lines');
   });
   const deckingVisibility = app.querySelector('#decking-visible');
   if (deckingVisibility) deckingVisibility.addEventListener('change', () => {
@@ -2559,6 +2567,16 @@ function handleAction(action, source = null) {
     const visible = !getDimensionLayer(documentModel).visible;
     message = `Dimensions layer ${visible ? 'shown' : 'hidden'}`;
     commit(setDimensionLayerVisibility(documentModel, visible), 'Toggle Dimensions layer');
+  }
+  if (action === 'toggle-railing-visibility') {
+    const visible = !getRailingLayer(documentModel).visible;
+    message = `Railing layer ${visible ? 'shown' : 'hidden'}`;
+    commit(setRailingLayerVisibility(documentModel, visible), 'Toggle Railing layer');
+  }
+  if (action === 'toggle-cat-construction-lines') {
+    const visible = !getCatConstructionLayer(documentModel).visible;
+    message = `CAT construction lines ${visible ? 'shown' : 'hidden'}`;
+    commit(setCatConstructionLayerVisibility(documentModel, visible), 'Toggle CAT construction lines');
   }
   if (action === 'edit-dimension' && selected.kind === 'dimension') editDimensionReference(selected.id);
   if (action === 'reset-dimension-position' && selected.kind === 'dimension') {

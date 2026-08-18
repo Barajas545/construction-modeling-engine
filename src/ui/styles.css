@@ -93,7 +93,8 @@ button { color: inherit; }
 .utility-close:hover { color: var(--text); border-color: #596873; }
 
 .canvas-panel { position: relative; min-width: 0; min-height: 0; background: #0d1114; }
-.canvas-toolbar { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 5px; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: rgb(18 23 28 / 94%); box-shadow: 0 12px 40px rgb(0 0 0 / 30%); z-index: 2; }
+.canvas-toolbar { position: absolute; top: 14px; left: 50%; max-width: calc(100% - 20px); transform: translateX(-50%); display: flex; align-items: center; gap: 5px; overflow-x: auto; scrollbar-width: none; white-space: nowrap; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: rgb(18 23 28 / 94%); box-shadow: 0 12px 40px rgb(0 0 0 / 30%); z-index: 2; }
+.canvas-toolbar::-webkit-scrollbar { display: none; }
 .canvas-toolbar .divider { width: 1px; height: 22px; background: var(--line); margin: 0 3px; }
 .button { border: 1px solid var(--line); background: var(--panel-raised); border-radius: 7px; min-height: 34px; padding: 0 12px; cursor: pointer; font-size: 12px; font-weight: 650; }
 .button:hover:not(:disabled) { border-color: #48545e; background: #202930; }
