@@ -44,6 +44,16 @@ button { color: inherit; }
 .tool-label { font-size: 9px; letter-spacing: .02em; }
 .tool-spacer { flex: 1; }
 
+.utility-popover { --connector-bottom: 96px; position: absolute; z-index: 7; left: 14px; bottom: 14px; width: min(350px, calc(100% - 28px)); border: 1px solid #43515a; border-radius: 12px; background: rgb(15 20 24 / 98%); box-shadow: 0 22px 56px rgb(0 0 0 / 48%); }
+.utility-popover.visibility { --connector-bottom: 154px; }
+.utility-popover::before { content: ''; position: absolute; left: -15px; bottom: var(--connector-bottom); width: 15px; height: 2px; background: var(--accent); box-shadow: 0 0 8px rgb(216 255 98 / 42%); }
+.utility-popover::after { content: ''; position: absolute; left: -5px; bottom: calc(var(--connector-bottom) - 4px); width: 8px; height: 8px; border: 1px solid var(--accent); background: #10161a; transform: rotate(45deg); }
+.utility-popover-body { max-height: calc(100vh - 170px); overflow: auto; border-radius: inherit; }
+.utility-popover .inspector-section { border-bottom: 0; padding: 20px; }
+.utility-popover h2 { margin: 8px 32px 5px 0; font-size: 18px; letter-spacing: -.02em; }
+.utility-close { position: absolute; z-index: 1; top: 12px; right: 12px; width: 30px; height: 30px; border: 1px solid #36434b; border-radius: 7px; background: #151c21; color: var(--muted); cursor: pointer; font-size: 19px; line-height: 1; }
+.utility-close:hover { color: var(--text); border-color: #596873; }
+
 .canvas-panel { position: relative; min-width: 0; min-height: 0; background: #0d1114; }
 .canvas-toolbar { position: absolute; top: 14px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 5px; padding: 5px; border: 1px solid var(--line); border-radius: 11px; background: rgb(18 23 28 / 94%); box-shadow: 0 12px 40px rgb(0 0 0 / 30%); z-index: 2; }
 .canvas-toolbar .divider { width: 1px; height: 22px; background: var(--line); margin: 0 3px; }
@@ -289,6 +299,7 @@ button { color: inherit; }
   .top-metric { min-width: 72px; padding-inline: 7px; }
   .top-metric strong { font-size: 11px; }
   .tool-button { width: 40px; }
+  .utility-popover { left: 10px; bottom: 10px; width: min(330px, calc(100% - 20px)); }
 }
 
 @media (max-width: 650px) {
@@ -307,4 +318,6 @@ button { color: inherit; }
   .canvas-toolbar { top: 10px; }
   .statusbar { bottom: 10px; }
   .cursor-hud { width: 166px; }
+  .utility-popover { --connector-bottom: 105px; }
+  .utility-popover.visibility { --connector-bottom: 169px; }
 }

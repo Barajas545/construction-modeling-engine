@@ -64,6 +64,7 @@ let moveBoundaryMode = null;
 let moveBoundaryGesture = null;
 let boardingDirectionMode = null;
 let pendingDeckDeleteId = null;
+let utilityPanel = null;
 
 function loadProject() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -154,6 +155,8 @@ function render() {
           <button class="tool-button ${mode === 'railing' ? 'active' : ''}" data-mode="railing" title="Add railing along a construction edge" ${!current ? 'disabled' : ''}><span class="tool-icon">╥</span><span class="tool-label">Railing</span></button>
           <button class="tool-button ${mode === 'level-down' ? 'active' : ''}" data-mode="level-down" title="Add a level-down construction line" ${!current ? 'disabled' : ''}><span class="tool-icon">↘</span><span class="tool-label">Level down</span></button>
           <div class="tool-spacer"></div>
+          <button class="tool-button ${utilityPanel === 'visibility' ? 'active' : ''}" data-action="toggle-visibility-panel" title="Drawing layer visibility" aria-pressed="${utilityPanel === 'visibility'}"><span class="tool-icon">◉</span><span class="tool-label">Visibility</span></button>
+          <button class="tool-button ${utilityPanel === 'snap' ? 'active' : ''}" data-action="toggle-snap-panel" title="Snap and precision controls" aria-pressed="${utilityPanel === 'snap'}"><span class="tool-icon">⌁</span><span class="tool-label">Snap</span></button>
           <button class="tool-button" data-action="toggle-inspector" title="Project details"><span class="tool-icon">☷</span><span class="tool-label">Details</span></button>
         </nav>
         <section class="canvas-panel">
@@ -171,9 +174,10 @@ function render() {
           <svg class="model-canvas ${mode === 'draw' || mode === 'level-down' ? 'drawing' : ''} ${boardingDirectionMode ? 'board-direction' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
           <div class="cursor-hud" aria-live="polite"><div class="hud-row"><span>Length</span><strong data-hud-length>—</strong></div><div class="hud-row"><span>Angle</span><strong data-hud-angle>—</strong></div><div class="hud-row snap"><span data-hud-snap-dot></span><strong data-hud-snap>Grid</strong></div><div class="hud-input" data-hud-input>Type a length</div></div>
           <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span><span class="stair-live-run"><b data-stair-live-run>—</b> total run</span></div><small data-stair-live-status>Release to build · 5″–7.5″ risers · 10″–11″ treads</small></div>
+          ${renderUtilityPopover()}
           <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
         </section>
-        <aside class="inspector open">${renderContextPanel(current)}${renderInspector(current, validation)}${renderLayerAndSnapControls()}</aside>
+        <aside class="inspector open">${renderContextPanel(current)}${renderInspector(current, validation)}</aside>
       </section>
     </main>`;
   bindEvents();
@@ -276,13 +280,23 @@ function renderLevelDownContext(levelDown, region, deckingVisible, close, select
   return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected lowered area</div><h2>${region ? formatSquareFeet(region.areaSquareInches) : formatFeetInches(segmentLength ?? 0)}</h2></div>${close}</div><div class="context-stat"><span>Below main deck</span><strong>${formatInches(totalDepth)}</strong><small>Includes overlapping level changes</small></div><label class="context-select"><span>This step drop · entire polyline</span><div class="compound-field"><input id="quick-level-down-riser" value="${formatInches(levelDown.dimensions.riserHeight)}"><button class="button" data-action="apply-level-down-riser">Apply</button></div></label><div class="context-actions context-actions-3"><button class="button" data-action="make-level-down-90">Make 90°</button><button class="button ${finishes.pictureFrame ? 'active-constraint' : ''}" data-action="quick-level-picture-frame">Picture frame</button><button class="button ${finishes.fascia ? 'active-constraint' : ''}" data-action="quick-level-fascia">Fascia</button></div><div class="context-actions"><button class="button" data-action="flip-level-down-side">Flip lowered side</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div>${selectedByDimension ? `<div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div>` : '<div class="context-actions"><button class="button" data-action="break-level-down-2">Break ×2</button><button class="button" data-action="break-level-down-3">Break ×3</button></div>'}<button class="button danger context-full" data-action="delete-level-down">Delete lowered area</button><div class="context-note">The arrow dimension owns this lowered area. Moving it draws a live leader back to the region.</div></section>`;
 }
 
-function renderLayerAndSnapControls() {
+function renderUtilityPopover() {
+  if (!utilityPanel) return '';
+  const content = utilityPanel === 'visibility' ? renderVisibilityControls() : renderSnapControls();
+  return `<div class="utility-popover ${utilityPanel}" role="dialog" aria-label="${utilityPanel === 'visibility' ? 'Drawing layer visibility' : 'Snap controls'}"><button class="utility-close" data-action="close-utility-panel" aria-label="Close panel">×</button><div class="utility-popover-body">${content}</div></div>`;
+}
+
+function renderVisibilityControls() {
   const dimensionsVisible = getDimensionLayer(documentModel).visible;
   const railingLayer = getRailingLayer(documentModel);
   const deckingLayer = getDeckingLayer(documentModel);
   const gridLayer = getGridLayer(documentModel);
+  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill and board pattern</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${gridLayer.visible ? '◉' : '○'}</span><span><strong>Construction grid</strong><small>Visual guide · snap remains independent</small></span><input id="grid-visible" type="checkbox" ${gridLayer.visible ? 'checked' : ''}></label></section>`;
+}
+
+function renderSnapControls() {
   const snapSettings = getSnapSettings(documentModel);
-  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill and board pattern</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${gridLayer.visible ? '◉' : '○'}</span><span><strong>Construction grid</strong><small>Visual guide · snap remains independent</small></span><input id="grid-visible" type="checkbox" ${gridLayer.visible ? 'checked' : ''}></label></section><section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Inference guides align new geometry to nearby nodes without creating permanent constraints.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${snapSettings.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${snapSettings.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><label class="snap-option"><input id="snap-node-inference" type="checkbox" ${snapSettings.nodeInference ? 'checked' : ''}><span><strong>Node inference</strong><small>Horizontal and vertical references</small></span><kbd>N</kbd></label><label class="snap-option"><input id="snap-diagonal-inference" type="checkbox" ${snapSettings.diagonalInference ? 'checked' : ''} ${snapSettings.nodeInference ? '' : 'disabled'}><span><strong>45° inference</strong><small>Diagonal references from nearby nodes</small></span><kbd>45°</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
+  return `<section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Inference guides align new geometry to nearby nodes without creating permanent constraints.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${snapSettings.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${snapSettings.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><label class="snap-option"><input id="snap-node-inference" type="checkbox" ${snapSettings.nodeInference ? 'checked' : ''}><span><strong>Node inference</strong><small>Horizontal and vertical references</small></span><kbd>N</kbd></label><label class="snap-option"><input id="snap-diagonal-inference" type="checkbox" ${snapSettings.diagonalInference ? 'checked' : ''} ${snapSettings.nodeInference ? '' : 'disabled'}><span><strong>45° inference</strong><small>Diagonal references from nearby nodes</small></span><kbd>45°</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
 }
 
 function renderInspector(current, validation) {
@@ -1109,6 +1123,7 @@ function bindEvents() {
 
 function setMode(nextMode) {
   mode = nextMode;
+  utilityPanel = null;
   boardingDirectionMode = null;
   pendingDeckDeleteId = null;
   moveBoundaryMode = null;
@@ -2466,7 +2481,15 @@ function handleAction(action) {
     }
   }
   if (action === 'fit-project') fitProject();
-  if (action === 'toggle-inspector') app.querySelector('.inspector')?.classList.toggle('open');
+  if (action === 'toggle-visibility-panel') { utilityPanel = utilityPanel === 'visibility' ? null : 'visibility'; render(); }
+  if (action === 'toggle-snap-panel') { utilityPanel = utilityPanel === 'snap' ? null : 'snap'; render(); }
+  if (action === 'close-utility-panel') { utilityPanel = null; render(); }
+  if (action === 'toggle-inspector') {
+    utilityPanel = null;
+    app.querySelector('.utility-popover')?.remove();
+    app.querySelectorAll('[data-action="toggle-visibility-panel"], [data-action="toggle-snap-panel"]').forEach((button) => button.classList.remove('active'));
+    app.querySelector('.inspector')?.classList.toggle('open');
+  }
 }
 
 function exportProject() {
@@ -2570,6 +2593,12 @@ function repeatLastSegment() {
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   const editingField = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+  if (event.key === 'Escape' && utilityPanel) {
+    event.preventDefault();
+    utilityPanel = null;
+    render();
+    return;
+  }
   if (event.key === 'Escape' && boardingDirectionMode) {
     event.preventDefault();
     boardingDirectionMode = null;
