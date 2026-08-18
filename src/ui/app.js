@@ -12,6 +12,8 @@ import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
 import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { deleteDeckAssembly } from '../tools/deck-boundary/delete-deck-assembly.js';
+import { clearDeckBoardingDirection, deriveDeckBoardingSegments, getDeckBoarding, rotateDeckBoardingDirection, setDeckBoardingDirection } from '../tools/deck-boarding/deck-boarding.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
 import { attachStairToBoundary, deriveStairDragOptions, deriveStairOpeningSnap, deriveStairSideSegments, deriveStairTreads, detachStairFromBoundary, findStairBoundaryConnection, getStairInterfaceEdge, materializeStairSideJunction, mergeStairBoundaryConnection, removeStairSideJunction, resolveStairHostEdge, setStairSidePosition, setStairWidth, synchronizeConnectedStairLevels, updateStairDimensions, updateStairInterfaceEdgeProperties, validateStairPlacement } from '../tools/stairs/stair.js';
 import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, deriveRailingLineGeometry, resolveRailingEndpointSnap, updateRailingSettings } from '../tools/railing/railing.js';
@@ -59,6 +61,8 @@ let levelDownPointer = null;
 let activeBoundaryId = null;
 let moveBoundaryMode = null;
 let moveBoundaryGesture = null;
+let boardingDirectionMode = null;
+let pendingDeckDeleteId = null;
 
 function loadProject() {
   const saved = localStorage.getItem(STORAGE_KEY);
@@ -161,7 +165,7 @@ function render() {
             ${draft.length >= 3 ? '<button class="button primary" data-action="complete-draft">Close boundary</button>' : ''}
             ${mode === 'level-down' ? '<button class="button primary" data-action="cancel-level-down">Cancel Level Down</button>' : ''}
           </div>
-          <svg class="model-canvas ${mode === 'draw' || mode === 'level-down' ? 'drawing' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
+          <svg class="model-canvas ${mode === 'draw' || mode === 'level-down' ? 'drawing' : ''} ${boardingDirectionMode ? 'board-direction' : ''}" viewBox="${viewport.x} ${viewport.y} ${viewport.width} ${viewport.height}" aria-label="Deck boundary modeling workspace"></svg>
           <div class="cursor-hud" aria-live="polite"><div class="hud-row"><span>Length</span><strong data-hud-length>—</strong></div><div class="hud-row"><span>Angle</span><strong data-hud-angle>—</strong></div><div class="hud-row snap"><span data-hud-snap-dot></span><strong data-hud-snap>Grid</strong></div><div class="hud-input" data-hud-input>Type a length</div></div>
           <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span><span class="stair-live-run"><b data-stair-live-run>—</b> total run</span></div><small data-stair-live-status>Release to build · 5″–7.5″ risers · 10″–11″ treads</small></div>
           <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
@@ -224,8 +228,11 @@ function renderContextPanel(current) {
     if (reference?.kind === 'area') {
       const localBoundary = reference.boundary;
       const levelDown = getBoundaryLevelDown(localBoundary);
+      const boarding = getDeckBoarding(localBoundary);
       const assemblyLocked = localBoundary.vertices.some((vertex) => vertex.locked) || localBoundary.edges.some((edge) => edge.properties?.custom?.locked);
-      return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(localBoundary.computed.areaSquareInches)}</h2></div>${close}</div><label class="context-select"><span>Down level · local deck</span><div class="compound-field"><input id="boundary-level-down" value="${formatInches(levelDown)}"><button class="button" data-action="apply-boundary-level">Apply</button></div></label><div class="context-actions"><button class="button primary ${moveBoundaryMode?.boundaryId === localBoundary.id ? 'active-constraint' : ''}" data-action="move-deck-area" ${assemblyLocked ? 'disabled' : ''}>Move deck area</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button" data-action="start-level-down">Add level down</button></div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="reset-dimension-position">Reset area position</button></div><div class="context-note">${assemblyLocked ? 'Unlock local nodes and edges before moving this deck.' : 'Move deck area keeps hosted stairs, railings, Level Down lines, and dimensions attached. A lower parallel deck can become a stair landing.'}</div></section>`;
+      const deleting = pendingDeckDeleteId === localBoundary.id;
+      const boardingActive = boardingDirectionMode?.boundaryId === localBoundary.id;
+      return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(localBoundary.computed.areaSquareInches)}</h2></div>${close}</div><label class="context-select"><span>Down level · local deck</span><div class="compound-field"><input id="boundary-level-down" value="${formatInches(levelDown)}"><button class="button" data-action="apply-boundary-level">Apply</button></div></label><div class="context-actions"><button class="button primary ${moveBoundaryMode?.boundaryId === localBoundary.id ? 'active-constraint' : ''}" data-action="move-deck-area" ${assemblyLocked ? 'disabled' : ''}>Move deck area</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button" data-action="start-level-down">Add level down</button></div><div class="context-actions context-actions-3"><button class="button ${boardingActive ? 'active-constraint' : ''}" data-action="set-board-direction">${boardingActive ? '✓ Select line' : boarding ? 'Change direction' : 'Board direction'}</button><button class="button" data-action="rotate-board-direction" ${boarding ? '' : 'disabled'}>Rotate 90°</button><button class="button" data-action="clear-board-direction" ${boarding ? '' : 'disabled'}>Clear boards</button></div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="reset-dimension-position">Reset area position</button></div>${deleting ? '<div class="delete-confirmation"><strong>Delete this complete deck area?</strong><span>Attached stairs, railings, Level Down objects, and local dimensions will also be removed.</span><div class="context-actions"><button class="button danger" data-action="confirm-delete-deck">Confirm delete</button><button class="button" data-action="cancel-delete-deck">Cancel</button></div></div>' : '<button class="button danger context-full" data-action="request-delete-deck">Delete deck area</button>'}<div class="context-note">${assemblyLocked ? 'Unlock local nodes and edges before moving this deck.' : boarding ? `Boarding follows a ${formatInches(boarding.boardWidth)} board with a ${formatInches(boarding.gap)} gap.` : 'Select Board direction, then touch any construction line. Deck objects remain above the subtle board pattern.'}</div></section>`;
     }
     if (reference?.kind === 'level-down-area') return renderLevelDownContext(reference.levelDown, reference.region, deckingVisible, close, true);
     return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected annotation</div><h2>Dimension</h2></div>${close}</div><div class="context-actions"><button class="button primary" data-action="edit-dimension">Edit object</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div><button class="button danger context-full" data-action="toggle-selected-dimension">Delete dimension</button></section>`;
@@ -436,6 +443,36 @@ function findLevelDownSegment(segmentId) {
     const start = levelDown.vertices[index];
     const end = levelDown.vertices[index + 1];
     return { levelDown, segment: levelDown.segments[index], index, start, end, length: Math.hypot(end.x - start.x, end.y - start.y) };
+  }
+  return null;
+}
+
+function resolveBoardingReference({ edgeId, stairEdgeId, stairSideReferenceId, levelDownSegmentId, railingId }) {
+  if (edgeId || stairEdgeId) {
+    const reference = resolveRailingHostByEdgeId(edgeId ?? stairEdgeId, stairEdgeId ? 'stair-interface-edge' : null);
+    if (reference?.start && reference?.end) return {
+      start: reference.start,
+      end: reference.end,
+      reference: { kind: reference.stair ? 'stair-interface' : 'boundary-edge', id: reference.edge.id, ownerId: reference.stair?.id ?? reference.host.boundaryId },
+    };
+  }
+  if (stairSideReferenceId) {
+    const reference = findStairSide(stairSideReferenceId);
+    const current = reference ? boundaryById(reference.stair.host.boundaryId) : null;
+    if (reference && current) {
+      const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+      const start = byId.get(reference.side === 'start' ? reference.stair.anchors.openingStartVertexId : reference.stair.anchors.openingEndVertexId);
+      const end = byId.get(reference.side === 'start' ? reference.stair.anchors.outerStartVertexId : reference.stair.anchors.outerEndVertexId);
+      if (start && end) return { start, end, reference: { kind: 'stair-side', id: stairSideReferenceId, ownerId: reference.stair.id } };
+    }
+  }
+  if (levelDownSegmentId) {
+    const reference = findLevelDownSegment(levelDownSegmentId);
+    if (reference) return { start: reference.start, end: reference.end, reference: { kind: 'level-down-segment', id: reference.segment.id, ownerId: reference.levelDown.id } };
+  }
+  if (railingId) {
+    const geometry = findRailingGeometry(railingId);
+    if (geometry) return { start: geometry.start, end: geometry.end, reference: { kind: 'railing-run', id: railingId, ownerId: railingId } };
   }
   return null;
 }
@@ -718,7 +755,10 @@ function renderBoundarySvg(svg, current, validation) {
   const points = current.vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ');
   const depthFactor = getBoundaryLevelDown(current) / 7.5;
   const shade = Math.max(5, 28 - depthFactor * 3);
-  if (getDeckingLayer(documentModel).visible) svg.append(svgElement('polygon', { points, class: `boundary-fill ${validation.valid ? '' : 'invalid'} ${current.id === activeBoundaryId ? 'active-deck' : ''}`, style: `fill: rgb(${shade} ${shade + 28} ${shade + 27} / 82%)`, 'data-boundary-id': current.id }));
+  if (getDeckingLayer(documentModel).visible) {
+    svg.append(svgElement('polygon', { points, class: `boundary-fill ${validation.valid ? '' : 'invalid'} ${current.id === activeBoundaryId ? 'active-deck' : ''}`, style: `fill: rgb(${shade} ${shade + 28} ${shade + 27} / 82%)`, 'data-boundary-id': current.id }));
+    renderDeckBoarding(svg, current);
+  }
   current.edges.forEach((edge, index) => {
     const start = current.vertices[index];
     const end = current.vertices[(index + 1) % current.vertices.length];
@@ -742,6 +782,25 @@ function renderBoundarySvg(svg, current, validation) {
       lock.textContent = '⚓';
       svg.append(lock);
     }
+  });
+}
+
+function renderDeckBoarding(svg, current) {
+  if (!getDeckBoarding(current)) return;
+  const byId = new Map(current.vertices.map((vertex) => [vertex.id, vertex]));
+  const stairExclusions = documentModel.objects
+    .filter((object) => object.type === 'stair' && object.host?.boundaryId === current.id)
+    .map((stair) => [stair.anchors.openingStartVertexId, stair.anchors.outerStartVertexId, stair.anchors.outerEndVertexId, stair.anchors.openingEndVertexId]
+      .map((id) => byId.get(id)).filter(Boolean))
+    .filter((polygon) => polygon.length === 4);
+  deriveDeckBoardingSegments(current, stairExclusions).forEach((segment) => {
+    svg.append(svgElement('line', {
+      x1: segment.start.x,
+      y1: segment.start.y,
+      x2: segment.end.x,
+      y2: segment.end.y,
+      class: 'deck-boarding-line',
+    }));
   });
 }
 
@@ -1035,6 +1094,8 @@ function bindEvents() {
 
 function setMode(nextMode) {
   mode = nextMode;
+  boardingDirectionMode = null;
+  pendingDeckDeleteId = null;
   moveBoundaryMode = null;
   moveBoundaryGesture = null;
   dimensionLeaderMode = null;
@@ -1082,6 +1143,24 @@ function canvasPointerDown(svg, event) {
     return;
   }
   activateBoundary(targetBoundaryId);
+  if (boardingDirectionMode && event.button === 0) {
+    event.preventDefault();
+    const line = resolveBoardingReference({ edgeId, stairEdgeId, stairSideReferenceId, levelDownSegmentId, railingId });
+    const target = boundaryById(boardingDirectionMode.boundaryId);
+    if (!line || !target) {
+      message = 'Touch a boundary, Stair, Level Down, or Railing line to set board direction';
+      updateStatusMessage();
+      return;
+    }
+    const updated = markBoundaryEdited(setDeckBoardingDirection(target, line.start, line.end, line.reference));
+    boardingDirectionMode = null;
+    pendingDeckDeleteId = null;
+    activeBoundaryId = target.id;
+    selected = { kind: 'dimension', id: areaDimensionId(target) };
+    message = 'Deck boards aligned to the selected construction line';
+    commit(upsertObject(documentModel, updated), 'Set deck board direction');
+    return;
+  }
   if (chamferMode && event.button === 0) {
     event.preventDefault();
     chamferGesture = { pointerId: event.pointerId, document: documentModel, vertexId: chamferMode.vertexId };
@@ -2037,7 +2116,7 @@ function toggleSelectedEdgeOrientation(type) {
 }
 
 function handleAction(action) {
-  if (action === 'clear-selection') { selected = { kind: null, id: null }; dimensionLeaderMode = null; dimensionLeaderGesture = null; chamferMode = null; chamferGesture = null; chamferDraft = null; moveBoundaryMode = null; moveBoundaryGesture = null; message = 'Ready'; render(); }
+  if (action === 'clear-selection') { selected = { kind: null, id: null }; dimensionLeaderMode = null; dimensionLeaderGesture = null; chamferMode = null; chamferGesture = null; chamferDraft = null; moveBoundaryMode = null; moveBoundaryGesture = null; boardingDirectionMode = null; pendingDeckDeleteId = null; message = 'Ready'; render(); }
   if (action === 'add-deck-boundary') {
     mode = 'draw'; draft = []; pointerWorld = null; selected = { kind: null, id: null };
     message = 'Draw the first corner of the new Deck Boundary';
@@ -2059,6 +2138,60 @@ function handleAction(action) {
     moveBoundaryMode = { boundaryId: reference.boundary.id };
     message = 'Move Deck Area active · drag anywhere to reposition the complete assembly';
     render();
+  }
+  if (action === 'set-board-direction' && selected.kind === 'dimension') {
+    const reference = resolveDimensionReference(selected.id);
+    if (reference?.kind !== 'area') return;
+    boardingDirectionMode = { boundaryId: reference.boundary.id };
+    moveBoundaryMode = null;
+    pendingDeckDeleteId = null;
+    message = 'Board direction active · touch any construction line';
+    render();
+  }
+  if (action === 'rotate-board-direction' && selected.kind === 'dimension') {
+    const reference = resolveDimensionReference(selected.id);
+    if (reference?.kind !== 'area' || !getDeckBoarding(reference.boundary)) return;
+    message = 'Deck board direction rotated 90 degrees';
+    commit(upsertObject(documentModel, markBoundaryEdited(rotateDeckBoardingDirection(reference.boundary))), 'Rotate deck board direction');
+  }
+  if (action === 'clear-board-direction' && selected.kind === 'dimension') {
+    const reference = resolveDimensionReference(selected.id);
+    if (reference?.kind !== 'area') return;
+    boardingDirectionMode = null;
+    message = 'Deck board pattern removed';
+    commit(upsertObject(documentModel, markBoundaryEdited(clearDeckBoardingDirection(reference.boundary))), 'Clear deck board direction');
+  }
+  if (action === 'request-delete-deck' && selected.kind === 'dimension') {
+    const reference = resolveDimensionReference(selected.id);
+    if (reference?.kind !== 'area') return;
+    pendingDeckDeleteId = reference.boundary.id;
+    boardingDirectionMode = null;
+    message = 'Review the complete deck deletion before confirming';
+    render();
+  }
+  if (action === 'cancel-delete-deck') {
+    pendingDeckDeleteId = null;
+    message = 'Deck area kept';
+    render();
+  }
+  if (action === 'confirm-delete-deck' && pendingDeckDeleteId) {
+    try {
+      const deletedBoundaryId = pendingDeckDeleteId;
+      const result = deleteDeckAssembly(documentModel, deletedBoundaryId);
+      const remaining = result.document.objects.filter((object) => object.type === 'deck-boundary');
+      pendingDeckDeleteId = null;
+      boardingDirectionMode = null;
+      activeBoundaryId = remaining[0]?.id ?? null;
+      selected = { kind: null, id: null };
+      mode = remaining.length ? 'select' : 'draw';
+      const removedObjects = result.removed.stairCount + result.removed.railingCount + result.removed.levelDownCount;
+      message = remaining.length ? `Deck area deleted${removedObjects ? ` with ${removedObjects} attached object${removedObjects === 1 ? '' : 's'}` : ''}` : 'Deck area deleted · draw a new boundary when ready';
+      commit(result.document, 'Delete complete Deck Boundary assembly');
+    } catch (error) {
+      pendingDeckDeleteId = null;
+      message = error.message;
+      render();
+    }
   }
   if (action === 'lock-edge' && selected.kind === 'edge') {
     message = 'Construction edge locked · position and length protected';
@@ -2410,6 +2543,13 @@ function repeatLastSegment() {
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   const editingField = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+  if (event.key === 'Escape' && boardingDirectionMode) {
+    event.preventDefault();
+    boardingDirectionMode = null;
+    message = 'Board direction selection canceled';
+    render();
+    return;
+  }
   if (event.key === 'Escape' && moveBoundaryMode) {
     event.preventDefault();
     if (moveBoundaryGesture) documentModel = moveBoundaryGesture.document;
