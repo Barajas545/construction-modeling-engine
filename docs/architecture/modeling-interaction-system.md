@@ -17,6 +17,8 @@ Snap targets use a common contract containing type, geometry, priority, and opti
 The first active candidates are:
 
 - endpoint;
+- combined node intersection;
+- horizontal, vertical, and 45-degree node inference;
 - midpoint;
 - edge projection;
 - horizontal and vertical alignment;
@@ -24,6 +26,10 @@ The first active candidates are:
 - construction grid.
 
 The priority table and target collector are extensible for intersections, centers, parallel and perpendicular relations, construction guides, and targets supplied by future construction objects.
+
+Node inference is a transient sketch relationship. While a new segment is active, CME may preserve that segment's horizontal, vertical, or 45-degree direction and intersect it with a horizontal, vertical, or 45-degree guide projected from a nearby existing node. Only the strongest reference is rendered, with a highlighted source node and intersection marker. Accepting the point stores its exact coordinates but does not silently create a permanent geometric constraint.
+
+Physical edge snapping, grid snapping, node inference, and diagonal inference are independent serializable project preferences. Node references remain available for inference when physical edge snapping is disabled. Mouse and touch use separate screen-space tolerances, and the current reference receives a larger release radius to reduce flicker without making the snap difficult to escape.
 
 ## Direct dimensions
 

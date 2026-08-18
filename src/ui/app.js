@@ -5,8 +5,9 @@ import { normalizeBoundaryEdge } from '../core/construction-objects/edge-propert
 import { getDimensionLayer, getDimensionLeaderOffset, getDimensionOffset, isDimensionReferenceVisible, setDimensionLayerVisibility, setDimensionLeaderOffset, setDimensionOffset, setDimensionReferenceVisibility } from '../core/annotations/dimension-layer.js';
 import { getDeckingLayer, setDeckingLayerVisibility } from '../core/annotations/decking-layer.js';
 import { getGridLayer, setGridLayerVisibility } from '../core/annotations/grid-layer.js';
-import { getRailingLayer, setRailingLayerVisibility, setRailingSnapSettings } from '../core/annotations/railing-layer.js';
+import { getRailingLayer, setRailingLayerVisibility } from '../core/annotations/railing-layer.js';
 import { collectSnapTargets, resolveSnap } from '../core/geometry/snap-engine.js';
+import { getSnapSettings, setSnapSettings } from '../core/geometry/snap-settings.js';
 import { nearestPointOnSegment } from '../core/geometry/vector.js';
 import { formatFeetInches, formatInches, formatSquareFeet } from '../core/units/length.js';
 import { parseConstructionLength } from '../core/units/parse-length.js';
@@ -284,7 +285,8 @@ function renderLayerAndSnapControls() {
   const railingLayer = getRailingLayer(documentModel);
   const deckingLayer = getDeckingLayer(documentModel);
   const gridLayer = getGridLayer(documentModel);
-  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill and board pattern</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${gridLayer.visible ? '◉' : '○'}</span><span><strong>Construction grid</strong><small>Visual guide · snap remains independent</small></span><input id="grid-visible" type="checkbox" ${gridLayer.visible ? 'checked' : ''}></label></section><section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Construction geometry takes priority over the grid. Disable either source when a different placement is needed.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${railingLayer.snap.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${railingLayer.snap.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
+  const snapSettings = getSnapSettings(documentModel);
+  return `<section class="inspector-section layer-panel"><div class="eyebrow">Drawing layers</div><h2>Visibility</h2><p class="section-copy">Hide model or annotation layers to reach construction lines underneath.</p><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${deckingLayer.visible ? '◉' : '○'}</span><span><strong>Decking</strong><small>Walkable surface fill and board pattern</small></span><input id="decking-visible" type="checkbox" ${deckingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${railingLayer.visible ? '◉' : '○'}</span><span><strong>Railing</strong><small>Construction runs and posts</small></span><input id="railing-visible" type="checkbox" ${railingLayer.visible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${dimensionsVisible ? '◉' : '○'}</span><span><strong>Dimensions</strong><small>Drag labels · double-click to edit</small></span><input id="dimensions-visible" type="checkbox" ${dimensionsVisible ? 'checked' : ''}></label><label class="layer-row"><span class="layer-grip">⋮⋮</span><span class="layer-eye">${gridLayer.visible ? '◉' : '○'}</span><span><strong>Construction grid</strong><small>Visual guide · snap remains independent</small></span><input id="grid-visible" type="checkbox" ${gridLayer.visible ? 'checked' : ''}></label></section><section class="inspector-section snap-panel"><div class="eyebrow">Precision</div><h2>Snap controls</h2><p class="section-copy">Inference guides align new geometry to nearby nodes without creating permanent constraints.</p><label class="snap-option"><input id="snap-edges" type="checkbox" ${snapSettings.edges ? 'checked' : ''}><span><strong>Edges & corners</strong><small>Connect endpoints to project geometry</small></span><kbd>E</kbd></label><label class="snap-option"><input id="snap-grid" type="checkbox" ${snapSettings.grid ? 'checked' : ''}><span><strong>Construction grid</strong><small>Place endpoints at field increments</small></span><kbd>G</kbd></label><label class="snap-option"><input id="snap-node-inference" type="checkbox" ${snapSettings.nodeInference ? 'checked' : ''}><span><strong>Node inference</strong><small>Horizontal and vertical references</small></span><kbd>N</kbd></label><label class="snap-option"><input id="snap-diagonal-inference" type="checkbox" ${snapSettings.diagonalInference ? 'checked' : ''} ${snapSettings.nodeInference ? '' : 'disabled'}><span><strong>45° inference</strong><small>Diagonal references from nearby nodes</small></span><kbd>45°</kbd></label><div class="field-grid"><div class="field full"><label for="grid-spacing">Grid snap increment</label><select id="grid-spacing"><option value="auto" ${gridSetting === 'auto' ? 'selected' : ''}>Adaptive view · ½″ precision</option>${[.5, 1, 2, 6, 12, 24].map((value) => `<option value="${value}" ${String(value) === String(gridSetting) ? 'selected' : ''}>${value} inch${value === 1 ? '' : 'es'}</option>`).join('')}</select></div></div><div class="action-stack"><button class="button" data-action="fit-project">Fit project to view</button></div></section>`;
 }
 
 function renderInspector(current, validation) {
@@ -1026,7 +1028,22 @@ function renderDraft(svg) {
     const anchor = draft[draft.length - 1];
     if (snapState.guides.includes('vertical')) svg.append(svgElement('line', { x1: pointerWorld.x, y1: viewport.y, x2: pointerWorld.x, y2: viewport.y + viewport.height, class: 'guide-line' }));
     if (snapState.guides.includes('horizontal')) svg.append(svgElement('line', { x1: viewport.x, y1: pointerWorld.y, x2: viewport.x + viewport.width, y2: pointerWorld.y, class: 'guide-line' }));
+    if (snapState.inference) renderNodeInferenceGuide(svg, snapState.inference, pointerWorld, markerSize);
   }
+}
+
+function renderNodeInferenceGuide(svg, inference, snappedPoint, markerSize) {
+  const reference = inference.referencePoint;
+  const direction = { x: Math.cos(inference.guideAngle), y: Math.sin(inference.guideAngle) };
+  const projection = (snappedPoint.x - reference.x) * direction.x + (snappedPoint.y - reference.y) * direction.y;
+  const projectedPoint = { x: reference.x + direction.x * projection, y: reference.y + direction.y * projection };
+  const extension = Math.max(18, viewport.width / 24);
+  const lineStart = { x: reference.x - direction.x * extension, y: reference.y - direction.y * extension };
+  const lineEnd = { x: projectedPoint.x + direction.x * extension, y: projectedPoint.y + direction.y * extension };
+  svg.append(svgElement('line', { x1: lineStart.x, y1: lineStart.y, x2: lineEnd.x, y2: lineEnd.y, class: 'node-inference-guide' }));
+  svg.append(svgElement('circle', { cx: reference.x, cy: reference.y, r: markerSize * 1.7, class: 'node-inference-reference-halo' }));
+  svg.append(svgElement('rect', { x: reference.x - markerSize / 2, y: reference.y - markerSize / 2, width: markerSize, height: markerSize, class: 'node-inference-reference', transform: `rotate(45 ${reference.x} ${reference.y})` }));
+  svg.append(svgElement('circle', { cx: snappedPoint.x, cy: snappedPoint.y, r: markerSize * .7, class: 'node-inference-intersection' }));
 }
 
 function bindEvents() {
@@ -1067,12 +1084,22 @@ function bindEvents() {
   const edgeSnap = app.querySelector('#snap-edges');
   if (edgeSnap) edgeSnap.addEventListener('change', () => {
     message = `Edge and corner snap ${edgeSnap.checked ? 'enabled' : 'disabled'}`;
-    commit(setRailingSnapSettings(documentModel, { edges: edgeSnap.checked }), 'Update Railing snap settings');
+    commit(setSnapSettings(documentModel, { edges: edgeSnap.checked }), 'Update edge snap settings');
   });
   const gridSnap = app.querySelector('#snap-grid');
   if (gridSnap) gridSnap.addEventListener('change', () => {
     message = `Grid snap ${gridSnap.checked ? 'enabled' : 'disabled'}`;
-    commit(setRailingSnapSettings(documentModel, { grid: gridSnap.checked }), 'Update Railing snap settings');
+    commit(setSnapSettings(documentModel, { grid: gridSnap.checked }), 'Update grid snap settings');
+  });
+  const nodeInference = app.querySelector('#snap-node-inference');
+  if (nodeInference) nodeInference.addEventListener('change', () => {
+    message = `Node inference ${nodeInference.checked ? 'enabled' : 'disabled'}`;
+    commit(setSnapSettings(documentModel, { nodeInference: nodeInference.checked }), 'Update node inference settings');
+  });
+  const diagonalInference = app.querySelector('#snap-diagonal-inference');
+  if (diagonalInference) diagonalInference.addEventListener('change', () => {
+    message = `45-degree node inference ${diagonalInference.checked ? 'enabled' : 'disabled'}`;
+    commit(setSnapSettings(documentModel, { diagonalInference: diagonalInference.checked }), 'Update diagonal inference settings');
   });
   const railingSystem = app.querySelector('#quick-railing-system');
   if (railingSystem) railingSystem.addEventListener('change', () => {
@@ -1349,11 +1376,11 @@ function canvasPointerDown(svg, event) {
     return;
   }
   if (mode !== 'draw') { selected = { kind: null, id: null }; render(); return; }
-  placeDraftPoint(screenToWorld(svg, event));
+  placeDraftPoint(screenToWorld(svg, event), event.pointerType);
 }
 
-function placeDraftPoint(raw) {
-  const snapped = snapForPointer(raw, draft[draft.length - 1]);
+function placeDraftPoint(raw, pointerType = 'mouse') {
+  const snapped = snapForPointer(raw, draft[draft.length - 1], [], new Set(), pointerType);
   if (draft.length >= 3 && Math.hypot(snapped.point.x - draft[0].x, snapped.point.y - draft[0].y) < 5) { completeDraft(); return; }
   draft.push(snapped.point);
   numericBuffer = '';
@@ -1572,7 +1599,7 @@ function canvasPointerMove(svg, event) {
     const index = current.vertices.findIndex((vertex) => vertex.id === draggingVertexId);
     const anchor = current.vertices[(index - 1 + current.vertices.length) % current.vertices.length];
     const adjacentIds = new Set([draggingVertexId, current.edges[index]?.id, current.edges[(index - 1 + current.edges.length) % current.edges.length]?.id]);
-    const snapped = snapForPointer(raw, anchor, [], adjacentIds);
+    const snapped = snapForPointer(raw, anchor, [], adjacentIds, event.pointerType);
     const constrainedBoundary = moveVertexWithConstraints(current, draggingVertexId, snapped.point);
     const constrainedPoint = constrainedBoundary.vertices[index];
     const tolerance = viewport.width / Math.max(svg.clientWidth, 1) * 14;
@@ -1584,7 +1611,7 @@ function canvasPointerMove(svg, event) {
     return;
   }
   if (mode === 'draw') {
-    snapState = snapForPointer(raw, draft[draft.length - 1]);
+    snapState = snapForPointer(raw, draft[draft.length - 1], [], new Set(), event.pointerType);
     pointerWorld = snapState.point;
     drawCanvasRefresh();
     updateHud(event);
@@ -1607,7 +1634,7 @@ function finishPointerGesture(svg, event) {
     activeTouches.delete(event.pointerId);
     if (pendingTouch?.pointerId === event.pointerId) pendingTouch = null;
     if (activeTouches.size < 2) touchGesture = null;
-    if (shouldPlace && placement) placeDraftPoint(screenToWorld(svg, placement));
+    if (shouldPlace && placement) placeDraftPoint(screenToWorld(svg, placement), 'touch');
   }
   if (panGesture) {
     panGesture = null;
@@ -1942,7 +1969,7 @@ function breakSelectedLevelDown(segmentCount) {
 }
 
 function resolveRailingSnap(raw) {
-  const layer = getRailingLayer(documentModel);
+  const settings = getSnapSettings(documentModel);
   const tolerance = viewport.width / Math.max(app.querySelector('.model-canvas')?.clientWidth ?? 1000, 1) * 16;
   const targets = { vertices: [], edges: [] };
   boundaries().forEach((current) => {
@@ -1956,20 +1983,33 @@ function resolveRailingSnap(raw) {
   });
   return resolveRailingEndpointSnap(raw, targets, {
     tolerance,
-    edges: layer.snap.edges,
-    grid: layer.snap.grid,
+    edges: settings.edges,
+    grid: settings.grid,
     gridSpacing: gridSetting === 'auto' ? .5 : Number(gridSetting),
   });
 }
 
-function snapForPointer(raw, anchor, extraVertices = [], excludedIds = new Set()) {
+function snapForPointer(raw, anchor, extraVertices = [], excludedIds = new Set(), pointerType = 'mouse') {
   const objects = boundaries();
+  const settings = getSnapSettings(documentModel);
   const draftObject = { vertices: [...draft, ...extraVertices], edges: [] };
-  const tolerance = viewport.width / Math.max(app.querySelector('.model-canvas')?.clientWidth ?? 1000, 1) * 11;
+  const worldPerPixel = viewport.width / Math.max(app.querySelector('.model-canvas')?.clientWidth ?? 1000, 1);
+  const isTouch = pointerType === 'touch';
+  const tolerance = worldPerPixel * (isTouch ? 18 : 10);
   return resolveSnap(raw, {
     anchor,
     tolerance,
+    inferenceTolerance: worldPerPixel * (isTouch ? 20 : 12),
+    inferenceReleaseMultiplier: 1.45,
+    maxInferenceReferenceDistance: Math.hypot(viewport.width, viewport.height) * .8,
+    angleToleranceRadians: (isTouch ? 5 : 4) * Math.PI / 180,
     grid: gridSetting === 'auto' ? .5 : Number(gridSetting),
+    gridEnabled: settings.grid,
+    edgesEnabled: settings.edges,
+    nodeInference: settings.nodeInference,
+    diagonalInference: settings.diagonalInference,
+    anchorReferenceId: anchor?.id ?? null,
+    preferredReferenceId: snapState?.referenceId ?? null,
     targets: collectSnapTargets([...objects, draftObject]).filter((target) => !excludedIds.has(target.referenceId)),
   });
 }
@@ -2576,16 +2616,23 @@ window.addEventListener('keydown', (event) => {
   if (modifier && event.key.toLowerCase() === 'y') { event.preventDefault(); handleAction('redo'); }
   if (!modifier && !editingField && mode !== 'draw' && event.key.toLowerCase() === 'e') {
     event.preventDefault();
-    const enabled = !getRailingLayer(documentModel).snap.edges;
+    const enabled = !getSnapSettings(documentModel).edges;
     message = `Edge and corner snap ${enabled ? 'enabled' : 'disabled'}`;
-    commit(setRailingSnapSettings(documentModel, { edges: enabled }), 'Toggle edge snap');
+    commit(setSnapSettings(documentModel, { edges: enabled }), 'Toggle edge snap');
     return;
   }
   if (!modifier && !editingField && mode !== 'draw' && event.key.toLowerCase() === 'g') {
     event.preventDefault();
-    const enabled = !getRailingLayer(documentModel).snap.grid;
+    const enabled = !getSnapSettings(documentModel).grid;
     message = `Grid snap ${enabled ? 'enabled' : 'disabled'}`;
-    commit(setRailingSnapSettings(documentModel, { grid: enabled }), 'Toggle grid snap');
+    commit(setSnapSettings(documentModel, { grid: enabled }), 'Toggle grid snap');
+    return;
+  }
+  if (!modifier && !editingField && mode !== 'draw' && event.key.toLowerCase() === 'n') {
+    event.preventDefault();
+    const enabled = !getSnapSettings(documentModel).nodeInference;
+    message = `Node inference ${enabled ? 'enabled' : 'disabled'}`;
+    commit(setSnapSettings(documentModel, { nodeInference: enabled }), 'Toggle node inference');
     return;
   }
   if (mode === 'draw' && !modifier && /^[0-9a-z.'"\-]$/i.test(event.key)) {

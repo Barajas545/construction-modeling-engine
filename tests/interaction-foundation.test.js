@@ -36,3 +36,56 @@ test('snap engine prioritizes construction endpoints over the grid', () => {
   assert.equal(snap.type, 'endpoint');
   assert.equal(snap.referenceId, 'a');
 });
+
+test('node inference combines the active line direction with a nearby node reference', () => {
+  const targets = [{ type: 'endpoint', point: { x: 80, y: 0 }, referenceId: 'reference-node' }];
+  const snap = resolveSnap({ x: 80.8, y: 100.8 }, {
+    anchor: { x: 0, y: 100 },
+    targets,
+    tolerance: 3,
+    inferenceTolerance: 3,
+    grid: 6,
+  });
+  assert.equal(snap.type, 'node-intersection');
+  assert.deepEqual(snap.point, { x: 80, y: 100 });
+  assert.equal(snap.label, 'Horizontal · Vertical to node');
+  assert.equal(snap.referenceId, 'reference-node');
+  assert.equal(snap.inference.combined, true);
+});
+
+test('node inference supports a 45-degree reference without making a permanent constraint', () => {
+  const targets = [{ type: 'endpoint', point: { x: 50, y: 50 }, referenceId: 'diagonal-node' }];
+  const snap = resolveSnap({ x: 100.5, y: 100.3 }, {
+    anchor: { x: 0, y: 100 },
+    targets,
+    tolerance: 2,
+    inferenceTolerance: 2,
+    grid: 6,
+  });
+  assert.equal(snap.type, 'node-intersection');
+  assert.ok(Math.abs(snap.point.x - 100) < 1e-6);
+  assert.ok(Math.abs(snap.point.y - 100) < 1e-6);
+  assert.equal(snap.label, 'Horizontal · 45° to node');
+});
+
+test('node references remain available while physical edge snaps are disabled', () => {
+  const targets = [{ type: 'endpoint', point: { x: 80, y: 0 }, referenceId: 'reference-node' }];
+  const inferred = resolveSnap({ x: 80.8, y: 100.8 }, {
+    anchor: { x: 0, y: 100 }, targets, tolerance: 3, inferenceTolerance: 3, edgesEnabled: false, gridEnabled: false,
+  });
+  assert.equal(inferred.type, 'node-intersection');
+  const free = resolveSnap({ x: 80.8, y: 100.8 }, {
+    anchor: { x: 0, y: 100 }, targets, tolerance: 3, nodeInference: false, edgesEnabled: false, gridEnabled: false,
+  });
+  assert.equal(free.type, 'alignment');
+});
+
+test('the active node reference receives a larger release tolerance', () => {
+  const targets = [{ type: 'endpoint', point: { x: 80, y: 0 }, referenceId: 'sticky-node' }];
+  const snap = resolveSnap({ x: 83.5, y: 100 }, {
+    anchor: { x: 0, y: 100 }, targets, tolerance: 2, inferenceTolerance: 3,
+    preferredReferenceId: 'sticky-node', inferenceReleaseMultiplier: 1.45,
+  });
+  assert.equal(snap.type, 'node-intersection');
+  assert.equal(snap.referenceId, 'sticky-node');
+});

@@ -1,6 +1,8 @@
 import { distance, nearestPointOnSegment } from './vector.js';
 
-const priority = { endpoint: 0, midpoint: 1, alignment: 2, angle: 3, edge: 4, grid: 5, none: 99 };
+const priority = { endpoint: 0, 'node-intersection': 1, 'node-inference': 2, midpoint: 3, alignment: 4, angle: 5, edge: 6, grid: 7, none: 99 };
+const INFERENCE_ANGLES = [0, Math.PI / 2, Math.PI / 4, Math.PI * 3 / 4];
+const EPSILON = 1e-8;
 
 export function collectSnapTargets(objects = []) {
   const targets = [];
@@ -23,6 +25,7 @@ export function resolveSnap(candidate, context = {}) {
   const grid = context.grid ?? .5;
   const candidates = [];
   for (const target of context.targets ?? []) {
+    if (context.edgesEnabled === false) continue;
     if (target.type === 'edge') {
       const projected = nearestPointOnSegment(candidate, target.start, target.end);
       if (projected.distance <= tolerance) candidates.push({ ...target, point: projected.point, distance: projected.distance });
@@ -43,14 +46,100 @@ export function resolveSnap(candidate, context = {}) {
       const lockedAngle = Math.round(angle / increment) * increment;
       const angularOffset = Math.abs(Math.atan2(Math.sin(angle - lockedAngle), Math.cos(angle - lockedAngle)));
       if (angularOffset <= 4 * Math.PI / 180) candidates.push({ type: 'angle', relation: `${Math.round(lockedAngle * 180 / Math.PI)}°`, point: { x: anchor.x + Math.cos(lockedAngle) * length, y: anchor.y + Math.sin(lockedAngle) * length }, distance: angularOffset * length, guides: ['angle'] });
+      if (context.nodeInference !== false) {
+        addNodeInferenceCandidates(candidates, candidate, anchor, lockedAngle, angularOffset, context);
+      }
     }
   }
-  candidates.push({ type: 'grid', point: { x: Math.round(candidate.x / grid) * grid, y: Math.round(candidate.y / grid) * grid }, distance: 0 });
+  if (context.gridEnabled !== false) candidates.push({ type: 'grid', point: { x: Math.round(candidate.x / grid) * grid, y: Math.round(candidate.y / grid) * grid }, distance: 0 });
+  else candidates.push({ type: 'none', point: { ...candidate }, distance: 0 });
   candidates.sort((a, b) => priority[a.type] - priority[b.type] || a.distance - b.distance);
   const result = candidates[0];
-  return { point: result.point, type: result.type, label: result.relation ?? snapLabel(result.type), guides: result.guides ?? [], referenceId: result.referenceId ?? null };
+  return { point: result.point, type: result.type, label: result.relation ?? snapLabel(result.type), guides: result.guides ?? [], referenceId: result.referenceId ?? null, inference: result.inference ?? null };
+}
+
+function addNodeInferenceCandidates(candidates, candidate, anchor, lockedAngle, angularOffset, context) {
+  const tolerance = context.inferenceTolerance ?? context.tolerance ?? 4;
+  const releaseMultiplier = context.inferenceReleaseMultiplier ?? 1.45;
+  const referenceLimit = context.maxInferenceReferenceDistance ?? Infinity;
+  const diagonalEnabled = context.diagonalInference !== false;
+  const endpoints = (context.targets ?? []).filter((target) => target.type === 'endpoint' && target.referenceId && target.referenceId !== context.anchorReferenceId);
+  const activeDirection = { x: Math.cos(lockedAngle), y: Math.sin(lockedAngle) };
+  const activeAngleValid = angularOffset <= (context.angleToleranceRadians ?? 4 * Math.PI / 180);
+  for (const target of endpoints) {
+    if (distance(candidate, target.point) > referenceLimit) continue;
+    const targetTolerance = target.referenceId === context.preferredReferenceId ? tolerance * releaseMultiplier : tolerance;
+    for (const guideAngle of INFERENCE_ANGLES) {
+      if (!diagonalEnabled && guideAngle !== 0 && guideAngle !== Math.PI / 2) continue;
+      const guideDirection = { x: Math.cos(guideAngle), y: Math.sin(guideAngle) };
+      const projection = projectToInfiniteLine(candidate, target.point, guideDirection);
+      if (projection.distance <= targetTolerance) {
+        candidates.push({
+          type: 'node-inference',
+          relation: `${guideLabel(guideAngle)} from node`,
+          point: projection.point,
+          distance: projection.distance,
+          referenceId: target.referenceId,
+          inference: { referencePoint: target.point, guideAngle, combined: false },
+        });
+      }
+      if (!activeAngleValid) continue;
+      const intersection = intersectInfiniteLines(anchor, activeDirection, target.point, guideDirection);
+      if (!intersection || distance(candidate, intersection) > targetTolerance) continue;
+      candidates.push({
+        type: 'node-intersection',
+        relation: `${angleLabel(lockedAngle)} · ${guideLabel(guideAngle)} to node`,
+        point: intersection,
+        distance: distance(candidate, intersection),
+        referenceId: target.referenceId,
+        guides: axisGuides(lockedAngle),
+        inference: { referencePoint: target.point, guideAngle, sourceAngle: lockedAngle, combined: true },
+      });
+    }
+  }
+}
+
+function projectToInfiniteLine(point, linePoint, direction) {
+  const along = (point.x - linePoint.x) * direction.x + (point.y - linePoint.y) * direction.y;
+  const projected = { x: linePoint.x + direction.x * along, y: linePoint.y + direction.y * along };
+  return { point: projected, distance: distance(point, projected) };
+}
+
+function intersectInfiniteLines(firstPoint, firstDirection, secondPoint, secondDirection) {
+  const denominator = firstDirection.x * secondDirection.y - firstDirection.y * secondDirection.x;
+  if (Math.abs(denominator) < EPSILON) return null;
+  const dx = secondPoint.x - firstPoint.x;
+  const dy = secondPoint.y - firstPoint.y;
+  const firstT = (dx * secondDirection.y - dy * secondDirection.x) / denominator;
+  return { x: firstPoint.x + firstDirection.x * firstT, y: firstPoint.y + firstDirection.y * firstT };
+}
+
+function normalizedDegrees(angle) {
+  const degrees = Math.round(angle * 180 / Math.PI);
+  return ((degrees % 360) + 360) % 360;
+}
+
+function guideLabel(angle) {
+  const degrees = normalizedDegrees(angle) % 180;
+  if (degrees === 0) return 'Horizontal';
+  if (degrees === 90) return 'Vertical';
+  return `${degrees}°`;
+}
+
+function angleLabel(angle) {
+  const degrees = normalizedDegrees(angle);
+  if (degrees === 0 || degrees === 180) return 'Horizontal';
+  if (degrees === 90 || degrees === 270) return 'Vertical';
+  return `${degrees}°`;
+}
+
+function axisGuides(angle) {
+  const degrees = normalizedDegrees(angle);
+  if (degrees === 0 || degrees === 180) return ['horizontal'];
+  if (degrees === 90 || degrees === 270) return ['vertical'];
+  return ['angle'];
 }
 
 function snapLabel(type) {
-  return ({ endpoint: 'Endpoint', midpoint: 'Midpoint', edge: 'On edge', grid: 'Grid', alignment: 'Aligned', angle: 'Angle' })[type] ?? 'Free';
+  return ({ endpoint: 'Endpoint', midpoint: 'Midpoint', edge: 'On edge', grid: 'Grid', alignment: 'Aligned', angle: 'Angle', 'node-inference': 'Node inference', 'node-intersection': 'Node intersection' })[type] ?? 'Free';
 }
