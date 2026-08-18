@@ -1,4 +1,6 @@
 import { createProjectDocument, parseProject, serializeProject, setProjectWorkflowStage, upsertObject } from '../core/document/project-document.js';
+import { activateLibraryProject, createProjectLibrary, getActiveProject, parseProjectLibrary, removeLibraryProject, serializeProjectLibrary, upsertLibraryProject } from '../core/document/project-library.js';
+import { createSalesHubStepOneMessage, createSalesHubStepOnePayload, parseSalesHubLaunchContext } from '../core/integrations/dcr-sales-hub.js';
 import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
 import { getBoundaryLevelDown, getDeckBoundaries, getProjectSurfaceArea, setBoundaryLevelDown, translateDeckAssembly } from '../core/construction-objects/multi-deck-project.js';
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
@@ -22,9 +24,12 @@ import { analyzeRailingGeometries, createRailingLine, deriveRailingGeometry, der
 
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STORAGE_KEY = 'cme.project.v1';
+const PROJECT_LIBRARY_STORAGE_KEY = 'cme.project-library.v1';
 const app = document.querySelector('#app');
-const history = new CommandStack();
-let documentModel = loadProject();
+let history = new CommandStack();
+let projectLibrary = loadProjectLibrary();
+let documentModel = getActiveProject(projectLibrary);
+const salesHubLaunch = parseSalesHubLaunchContext(window.location.search);
 let mode = 'select';
 let draft = [];
 let pointerWorld = null;
@@ -65,11 +70,23 @@ let moveBoundaryGesture = null;
 let boardingDirectionMode = null;
 let pendingDeckDeleteId = null;
 let utilityPanel = null;
+let projectMenuOpen = false;
+let exportMenuOpen = false;
+let pendingProjectDeleteId = null;
 
-function loadProject() {
-  const saved = localStorage.getItem(STORAGE_KEY);
-  if (!saved) return createProjectDocument({ name: 'Backyard deck' });
-  try { return parseProject(saved); } catch { return createProjectDocument({ name: 'Recovered project' }); }
+function loadProjectLibrary() {
+  const savedLibrary = localStorage.getItem(PROJECT_LIBRARY_STORAGE_KEY);
+  if (savedLibrary) {
+    try {
+      const library = parseProjectLibrary(savedLibrary);
+      if (getActiveProject(library)) return library;
+    } catch { /* Migrate the last single-project save below. */ }
+  }
+  const savedProject = localStorage.getItem(STORAGE_KEY);
+  if (savedProject) {
+    try { return createProjectLibrary(parseProject(savedProject)); } catch { /* Recover with a new project below. */ }
+  }
+  return createProjectLibrary(createProjectDocument({ name: 'Backyard deck' }));
 }
 
 function boundaries() {
@@ -116,6 +133,8 @@ function commitBoundary(nextBoundary, label) {
 }
 
 function persist() {
+  projectLibrary = upsertLibraryProject(projectLibrary, documentModel);
+  localStorage.setItem(PROJECT_LIBRARY_STORAGE_KEY, serializeProjectLibrary(projectLibrary));
   localStorage.setItem(STORAGE_KEY, serializeProject(documentModel));
 }
 
@@ -139,13 +158,15 @@ function render() {
   const dimensionLayer = getDimensionLayer(documentModel);
   const projectSurface = getProjectSurfaceArea(documentModel);
   const deckAreaCount = boundaries().length;
+  const railingSummary = analyzeRailingGeometries(getAllRailingGeometries());
+  const stairCount = documentModel.objects.filter((object) => object.type === 'stair').length;
   app.innerHTML = `
     <main class="app-shell">
       <header class="topbar">
         <div class="brand"><div class="brand-mark">CME</div><div class="brand-copy"><div class="brand-name">Construction Modeling Engine</div><div class="brand-subtitle">${progress.stage.label} · One evolving project</div></div></div>
-        <div class="project-name"><span class="saved-dot"></span>${escapeHtml(documentModel.name)} <span style="color:var(--muted);font-weight:500">· Saved locally</span></div>
+        <div class="project-switcher"><button class="project-switcher-button ${projectMenuOpen ? 'active' : ''}" data-action="toggle-project-menu" aria-expanded="${projectMenuOpen}"><span class="saved-dot"></span><span>${escapeHtml(documentModel.name)}</span><small>Saved locally</small><b>⌄</b></button>${renderProjectMenu()}</div>
         <div class="project-summary" aria-label="Project totals"><div class="top-metric"><span>Project surface</span><strong>${formatSquareFeet(projectSurface)}</strong></div><div class="top-metric"><span>Deck areas</span><strong>${deckAreaCount}</strong></div></div>
-        <div class="top-actions"><button class="button ghost" data-action="export">Export project</button></div>
+        <div class="top-actions"><button class="button primary save-step-one" data-action="save-step-one">Save to Step 1</button><div class="export-control"><button class="button ghost export-toggle ${exportMenuOpen ? 'active-constraint' : ''}" data-action="toggle-export-menu" aria-expanded="${exportMenuOpen}"><span class="export-long">Export options</span><span class="export-short">Export</span> ⌄</button>${renderExportMenu()}</div></div>
       </header>
       <section class="workspace-shell">
         <nav class="toolrail" aria-label="Modeling tools">
@@ -175,6 +196,7 @@ function render() {
           <div class="cursor-hud" aria-live="polite"><div class="hud-row"><span>Length</span><strong data-hud-length>—</strong></div><div class="hud-row"><span>Angle</span><strong data-hud-angle>—</strong></div><div class="hud-row snap"><span data-hud-snap-dot></span><strong data-hud-snap>Grid</strong></div><div class="hud-input" data-hud-input>Type a length</div></div>
           <div class="stair-live-hud" aria-live="polite"><div class="stair-live-label">TOTAL RISE</div><strong data-stair-live-rise>0″</strong><div class="stair-live-grid"><span><b data-stair-live-risers>—</b> risers</span><span><b data-stair-live-treads>—</b> treads</span><span><b data-stair-live-riser>—</b> each rise</span><span><b data-stair-live-tread>—</b> each tread</span><span class="stair-live-run"><b data-stair-live-run>—</b> total run</span></div><small data-stair-live-status>Release to build · 5″–7.5″ risers · 10″–11″ treads</small></div>
           ${renderUtilityPopover()}
+          <section class="print-title-block"><div><div class="eyebrow">CME Sketch Plan</div><h1>${escapeHtml(documentModel.name)}</h1></div><div class="print-metrics"><span><small>Decking</small><strong>${formatSquareFeet(projectSurface)}</strong></span><span><small>Railing</small><strong>${formatFeetInches(railingSummary.totalLength)}</strong></span><span><small>Stairs</small><strong>${stairCount}</strong></span></div></section>
           <div class="statusbar"><div class="status-pill">${escapeHtml(message)}</div><div class="status-pill"><strong>${gridSetting === 'auto' ? 'Adaptive' : `${gridSetting}″`} grid</strong> · Wheel zoom · Right-drag pan · Middle double-click fit</div></div>
         </section>
         <aside class="inspector open">${renderContextPanel(current)}${renderInspector(current, validation)}</aside>
@@ -182,6 +204,23 @@ function render() {
     </main>`;
   bindEvents();
   drawCanvas(app.querySelector('.model-canvas'), current, validation);
+}
+
+function renderProjectMenu() {
+  if (!projectMenuOpen) return '';
+  const projects = [...projectLibrary.projects].sort((a, b) => String(b.updatedAt).localeCompare(String(a.updatedAt)));
+  const rows = projects.map((project) => {
+    const active = project.id === documentModel.id;
+    const confirming = pendingProjectDeleteId === project.id;
+    const area = getProjectSurfaceArea(project);
+    return `<article class="project-list-item ${active ? 'active' : ''}"><button class="project-open" data-action="open-project" data-project-id="${escapeHtml(project.id)}"><span><strong>${escapeHtml(project.name)}</strong><small>${formatSquareFeet(area)} · ${new Date(project.updatedAt).toLocaleDateString()}</small></span>${active ? '<b>OPEN</b>' : '<b>Open</b>'}</button>${confirming ? `<div class="project-delete-confirm"><span>Delete this local project?</span><button class="button danger" data-action="confirm-delete-project" data-project-id="${escapeHtml(project.id)}">Delete</button><button class="button ghost" data-action="cancel-delete-project">Cancel</button></div>` : `<button class="project-delete" data-action="request-delete-project" data-project-id="${escapeHtml(project.id)}" aria-label="Delete ${escapeHtml(project.name)}">×</button>`}</article>`;
+  }).join('');
+  return `<section class="project-menu" role="dialog" aria-label="Project options"><div class="project-menu-heading"><div><div class="eyebrow">Current project</div><strong>Project options</strong></div><button class="menu-close" data-action="close-project-menu" aria-label="Close project options">×</button></div><label class="project-name-editor"><span>Project name</span><div><input id="project-name-input" value="${escapeHtml(documentModel.name)}" maxlength="80"><button class="button" data-action="rename-project">Save</button></div></label><button class="button primary new-project-button" data-action="new-project">+ New project</button><div class="project-list-heading"><span>Projects on this device</span><small>${projects.length}</small></div><div class="project-list">${rows}</div><p class="project-storage-note">Projects autosave independently. Future SharePoint or OneDrive sync can replace this local library without changing the project format.</p></section>`;
+}
+
+function renderExportMenu() {
+  if (!exportMenuOpen) return '';
+  return `<section class="export-menu" role="menu"><button data-action="export-pdf"><span><strong>Export PDF</strong><small>Professional visual sketch and field quantities</small></span><b>PDF</b></button><button data-action="download-step-one-json"><span><strong>Download Step 1 JSON</strong><small>Portable fallback for DCR Sales Hub</small></span><b>JSON</b></button></section>`;
 }
 
 function renderContextPanel(current) {
@@ -271,7 +310,7 @@ function refreshContextPanel() {
   if (!markup) return;
   inspector.insertAdjacentHTML('afterbegin', markup);
   const panel = inspector.querySelector(':scope > .context-object-panel');
-  panel?.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button.dataset.action)));
+  panel?.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button.dataset.action, button)));
 }
 
 function renderLevelDownContext(levelDown, region, deckingVisible, close, selectedByDimension, segmentLength = null) {
@@ -316,8 +355,7 @@ function renderInspector(current, validation) {
     ${selectedStair ? renderStairObjectInspector(selectedStair) : ''}
     ${selectedStairEdge ? renderStairInterfaceInspector(current, selectedStairEdge.stair, selectedStairEdge.edge) : ''}
     ${selectedRailing ? renderRailingInspector(selectedRailing) : ''}
-    ${selectedVertex ? `<section class="inspector-section"><div class="eyebrow">Selected corner</div><h2>Geometry corner</h2><p class="section-copy">Drag freely, or place this corner over a neighboring corner to merge them and remove the redundant edge.</p><div class="vertex-guidance"><span class="merge-symbol"></span><span>Neighboring corners glow when a valid merge is available.</span></div><div class="action-stack"><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Remove corner</button></div></section>` : ''}
-    <section class="inspector-section"><div class="eyebrow">Project model</div><h2>Ready for future objects</h2><p class="section-copy">Edges and corners keep stable identities for house attachments, stairs, railings, fascia, framing, and takeoff.</p><div class="action-stack"><button class="button" data-action="new-boundary">Start over</button></div></section>`;
+    ${selectedVertex ? `<section class="inspector-section"><div class="eyebrow">Selected corner</div><h2>Geometry corner</h2><p class="section-copy">Drag freely, or place this corner over a neighboring corner to merge them and remove the redundant edge.</p><div class="vertex-guidance"><span class="merge-symbol"></span><span>Neighboring corners glow when a valid merge is available.</span></div><div class="action-stack"><button class="button danger" data-action="delete-vertex" ${current.vertices.length <= 3 ? 'disabled' : ''}>Remove corner</button></div></section>` : ''}`;
 }
 
 function renderRailingInspector(geometry) {
@@ -1051,7 +1089,11 @@ function renderNodeInferenceGuide(svg, inference, snappedPoint, markerSize) {
 
 function bindEvents() {
   app.querySelectorAll('[data-mode]').forEach((button) => button.addEventListener('click', () => setMode(button.dataset.mode)));
-  app.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button.dataset.action)));
+  app.querySelectorAll('[data-action]').forEach((button) => button.addEventListener('click', () => handleAction(button.dataset.action, button)));
+  const projectNameInput = app.querySelector('#project-name-input');
+  if (projectNameInput) projectNameInput.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') { event.preventDefault(); handleAction('rename-project'); }
+  });
   const role = app.querySelector('#edge-role');
   if (role) role.addEventListener('change', () => commitBoundary(markBoundaryEdited(setEdgeRole(boundary(), selected.id, role.value)), 'Set edge relationship'));
   const railing = app.querySelector('#edge-railing');
@@ -1124,6 +1166,8 @@ function bindEvents() {
 function setMode(nextMode) {
   mode = nextMode;
   utilityPanel = null;
+  projectMenuOpen = false;
+  exportMenuOpen = false;
   boardingDirectionMode = null;
   pendingDeckDeleteId = null;
   moveBoundaryMode = null;
@@ -2158,7 +2202,67 @@ function toggleSelectedEdgeOrientation(type) {
   }
 }
 
-function handleAction(action) {
+function handleAction(action, source = null) {
+  if (action === 'toggle-project-menu') { projectMenuOpen = !projectMenuOpen; exportMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
+  if (action === 'close-project-menu') { projectMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
+  if (action === 'toggle-export-menu') { exportMenuOpen = !exportMenuOpen; projectMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
+  if (action === 'rename-project') {
+    const name = app.querySelector('#project-name-input')?.value.trim();
+    if (!name) { message = 'Enter a project name'; render(); return; }
+    documentModel = { ...documentModel, name, updatedAt: new Date().toISOString() };
+    persist();
+    projectMenuOpen = true;
+    message = 'Project name updated';
+    render();
+    return;
+  }
+  if (action === 'new-project') {
+    persist();
+    const next = createProjectDocument({ name: `Deck project ${projectLibrary.projects.length + 1}` });
+    projectLibrary = upsertLibraryProject(projectLibrary, next);
+    documentModel = next;
+    history = new CommandStack();
+    resetProjectWorkspaceState();
+    projectMenuOpen = true;
+    persist();
+    message = 'New independent project created';
+    render();
+    return;
+  }
+  if (action === 'open-project') {
+    const projectId = source?.dataset.projectId;
+    if (!projectId || projectId === documentModel.id) return;
+    persist();
+    projectLibrary = activateLibraryProject(projectLibrary, projectId);
+    documentModel = getActiveProject(projectLibrary);
+    history = new CommandStack();
+    resetProjectWorkspaceState();
+    projectMenuOpen = false;
+    persist();
+    message = `${documentModel.name} opened`;
+    render();
+    return;
+  }
+  if (action === 'request-delete-project') { pendingProjectDeleteId = source?.dataset.projectId ?? null; projectMenuOpen = true; render(); return; }
+  if (action === 'cancel-delete-project') { pendingProjectDeleteId = null; projectMenuOpen = true; render(); return; }
+  if (action === 'confirm-delete-project') {
+    const projectId = source?.dataset.projectId;
+    if (!projectId) return;
+    projectLibrary = removeLibraryProject(projectLibrary, projectId);
+    if (!projectLibrary.projects.length) projectLibrary = createProjectLibrary(createProjectDocument({ name: 'New deck project' }));
+    documentModel = getActiveProject(projectLibrary);
+    history = new CommandStack();
+    resetProjectWorkspaceState();
+    projectMenuOpen = true;
+    pendingProjectDeleteId = null;
+    persist();
+    message = 'Local project deleted';
+    render();
+    return;
+  }
+  if (action === 'save-step-one') { saveToStepOne(); return; }
+  if (action === 'download-step-one-json') { downloadStepOneJson(); return; }
+  if (action === 'export-pdf') { exportProjectPdf(); return; }
   if (action === 'clear-selection') { selected = { kind: null, id: null }; dimensionLeaderMode = null; dimensionLeaderGesture = null; chamferMode = null; chamferGesture = null; chamferDraft = null; moveBoundaryMode = null; moveBoundaryGesture = null; boardingDirectionMode = null; pendingDeckDeleteId = null; message = 'Ready'; render(); }
   if (action === 'add-deck-boundary') {
     mode = 'draw'; draft = []; pointerWorld = null; selected = { kind: null, id: null };
@@ -2472,7 +2576,6 @@ function handleAction(action) {
     const next = { ...documentModel, objects: documentModel.objects.filter((object) => !['deck-boundary', 'stair', 'railing-run', 'level-down'].includes(object.type)) };
     commit(next, 'Remove deck boundary'); selected = { kind: null, id: null }; mode = 'select'; message = 'Ready for a new boundary';
   }
-  if (action === 'export') exportProject();
   if (action === 'advance-stage') {
     const progress = deriveModelProgress(documentModel);
     if (progress.nextStage.id !== progress.stage.id) {
@@ -2492,15 +2595,69 @@ function handleAction(action) {
   }
 }
 
-function exportProject() {
-  const blob = new Blob([serializeProject(documentModel)], { type: 'application/json' });
+function resetProjectWorkspaceState() {
+  selected = { kind: null, id: null };
+  activeBoundaryId = null;
+  mode = 'select';
+  draft = [];
+  stairDraft = null;
+  railingDraft = null;
+  levelDownDraft = [];
+  utilityPanel = null;
+  exportMenuOpen = false;
+  pendingDeckDeleteId = null;
+  viewport = createViewport();
+}
+
+function stepOnePayload() {
+  const railingRuns = getAllRailingGeometries().map((geometry) => ({
+    id: geometry.railing.id,
+    system: geometry.railing.settings?.system ?? 'unassigned',
+    lengthInches: geometry.length,
+  }));
+  return createSalesHubStepOnePayload(documentModel, {
+    opportunityId: salesHubLaunch.opportunityId,
+    railingRuns,
+  });
+}
+
+function downloadJson(payload, suffix) {
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
   anchor.href = url;
-  anchor.download = `${documentModel.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}.cme.json`;
+  anchor.download = `${documentModel.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${suffix}.json`;
   anchor.click();
   URL.revokeObjectURL(url);
-  message = 'Project exported';
+}
+
+function saveToStepOne() {
+  const payload = stepOnePayload();
+  const target = window.opener ?? (window.parent !== window ? window.parent : null);
+  if (salesHubLaunch.connected && target) {
+    target.postMessage(createSalesHubStepOneMessage(payload), salesHubLaunch.targetOrigin);
+    message = 'Decking, railing, stairs, and sketch reference sent to Step 1';
+  } else {
+    downloadJson(payload, 'step-1');
+    message = 'Step 1 JSON downloaded · direct Sales Hub connection is ready for a future launch context';
+  }
+  exportMenuOpen = false;
+  render();
+}
+
+function downloadStepOneJson() {
+  downloadJson(stepOnePayload(), 'step-1');
+  exportMenuOpen = false;
+  message = 'Step 1 JSON downloaded';
+  render();
+}
+
+function exportProjectPdf() {
+  exportMenuOpen = false;
+  projectMenuOpen = false;
+  fitProject();
+  message = 'PDF layout ready';
+  window.setTimeout(() => window.print(), 80);
   render();
 }
 
@@ -2593,6 +2750,14 @@ function repeatLastSegment() {
 window.addEventListener('keydown', (event) => {
   const modifier = event.ctrlKey || event.metaKey;
   const editingField = ['INPUT', 'SELECT', 'TEXTAREA'].includes(document.activeElement?.tagName);
+  if (event.key === 'Escape' && (projectMenuOpen || exportMenuOpen)) {
+    event.preventDefault();
+    projectMenuOpen = false;
+    exportMenuOpen = false;
+    pendingProjectDeleteId = null;
+    render();
+    return;
+  }
   if (event.key === 'Escape' && utilityPanel) {
     event.preventDefault();
     utilityPanel = null;
