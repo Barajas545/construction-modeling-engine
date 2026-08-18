@@ -13,7 +13,7 @@ import { formatFeetInches, formatInches, formatSquareFeet } from '../core/units/
 import { parseConstructionLength } from '../core/units/parse-length.js';
 import { CommandStack, replaceDocument } from '../history/command-stack.js';
 import { adaptiveGridSpacing, createViewport, fitViewport, panViewport, zoomViewport } from '../rendering/viewport-controller.js';
-import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, establishDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
+import { chamferVertex, clearEdgeOrientationConstraint, createDeckBoundary, findAdjacentMergeCandidate, getBoundaryCentroid, getBoundaryLifecycle, getEdgeOrientationConstraint, insertVertex, isEdgeLocked, isVertexLocked, markBoundaryEdited, mergeAdjacentVertices, moveVertexWithConstraints, offsetEdge, orthogonalizeBoundary, removeVertex, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, setEdgeRole, setVertexLocked, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../tools/deck-boundary/deck-boundary.js';
 import { deleteDeckAssembly } from '../tools/deck-boundary/delete-deck-assembly.js';
 import { clearDeckBoardingDirection, deriveDeckBoardingSegments, getDeckBoarding, rotateDeckBoardingDirection, setDeckBoardingDirection } from '../tools/deck-boarding/deck-boarding.js';
 import { createLevelDown, deriveLevelDownDepth, deriveLevelDownRegion, orthogonalizeLevelDown, setLevelDownRiserHeight, splitLevelDownSegment, updateLevelDownProperties } from '../tools/level-down/level-down.js';
@@ -135,14 +135,16 @@ function render() {
   const current = boundary();
   const validation = current ? validateDeckBoundary(current) : null;
   const progress = deriveModelProgress(documentModel);
-  const lifecycle = current ? getBoundaryLifecycle(current) : null;
   const dimensionLayer = getDimensionLayer(documentModel);
+  const projectSurface = getProjectSurfaceArea(documentModel);
+  const deckAreaCount = boundaries().length;
   app.innerHTML = `
     <main class="app-shell">
       <header class="topbar">
         <div class="brand"><div class="brand-mark">CME</div><div class="brand-copy"><div class="brand-name">Construction Modeling Engine</div><div class="brand-subtitle">${progress.stage.label} · One evolving project</div></div></div>
         <div class="project-name"><span class="saved-dot"></span>${escapeHtml(documentModel.name)} <span style="color:var(--muted);font-weight:500">· Saved locally</span></div>
-        <div class="top-actions"><button class="button ghost" data-action="export">Export project</button><button class="button ${lifecycle?.phase === 'established' ? '' : 'primary'}" data-action="finish" ${!current || !validation.valid || lifecycle?.phase === 'established' ? 'disabled' : ''}>${lifecycle?.phase === 'established' ? 'Boundary established' : 'Establish boundary'}</button></div>
+        <div class="project-summary" aria-label="Project totals"><div class="top-metric"><span>Project surface</span><strong>${formatSquareFeet(projectSurface)}</strong></div><div class="top-metric"><span>Deck areas</span><strong>${deckAreaCount}</strong></div></div>
+        <div class="top-actions"><button class="button ghost" data-action="export">Export project</button></div>
       </header>
       <section class="workspace-shell">
         <nav class="toolrail" aria-label="Modeling tools">
@@ -293,10 +295,9 @@ function renderInspector(current, validation) {
   const selectedStairEdge = selected.kind === 'stair-edge' ? findStairInterfaceByEdgeId(selected.id) : null;
   const selectedDimension = selected.kind === 'dimension' ? resolveDimensionReference(selected.id) : null;
   const selectedRailing = selected.kind === 'railing' ? findRailingGeometry(selected.id) : null;
-  const lifecycle = getBoundaryLifecycle(current);
   const firstIssue = validation.issues[0];
   return `
-    <section class="inspector-section"><div class="object-status"><div><div class="eyebrow">Deck Boundary ${boundaries().findIndex((entry) => entry.id === current.id) + 1} of ${boundaries().length}</div><h2>${escapeHtml(current.name)}</h2></div><span class="object-badge ${lifecycle.phase}">${lifecycle.phase === 'established' ? 'Authoritative' : 'Review'}</span></div><p class="section-copy">${lifecycle.phase === 'established' ? 'The active walkable surface. Select another local area label to change decks.' : 'A completed sketch awaiting field confirmation before it becomes authoritative.'}</p><div class="metric-grid"><div class="metric"><div class="metric-label">Project surface</div><div class="metric-value">${formatSquareFeet(getProjectSurfaceArea(documentModel))}</div></div><div class="metric"><div class="metric-label">Local area</div><div class="metric-value">${formatSquareFeet(current.computed.areaSquareInches)}</div></div><div class="metric"><div class="metric-label">Down level</div><div class="metric-value">${formatInches(getBoundaryLevelDown(current))}</div></div><div class="metric"><div class="metric-label">Deck areas</div><div class="metric-value">${boundaries().length}</div></div></div><div class="validation ${validation.valid ? '' : 'error'}"><span class="validation-dot"></span><span>${validation.valid ? lifecycle.phase === 'established' ? 'Construction object is valid and remains fully editable.' : 'Sketch is valid. Establish it when field measurements are confirmed.' : escapeHtml(firstIssue?.message ?? 'Boundary needs attention.')}</span></div></section>
+    ${validation.valid ? '' : `<section class="inspector-section"><div class="validation error"><span class="validation-dot"></span><span>${escapeHtml(firstIssue?.message ?? 'Boundary needs attention.')}</span></div></section>`}
     ${selectedEdge ? renderEdgeInspector(current, selectedEdge) : ''}
     ${stairDraft && selectedEdge ? renderStairInspector(current, selectedEdge) : ''}
     ${selectedStair ? renderStairObjectInspector(selectedStair) : ''}
@@ -2463,7 +2464,6 @@ function handleAction(action) {
     commit(next, 'Remove deck boundary'); selected = { kind: null, id: null }; mode = 'select'; message = 'Ready for a new boundary';
   }
   if (action === 'export') exportProject();
-  if (action === 'finish' && boundary()) { message = 'Deck Boundary is now the authoritative project footprint'; commitBoundary(establishDeckBoundary(boundary()), 'Establish deck boundary'); }
   if (action === 'advance-stage') {
     const progress = deriveModelProgress(documentModel);
     if (progress.nextStage.id !== progress.stage.id) {

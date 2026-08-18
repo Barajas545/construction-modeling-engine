@@ -21,7 +21,7 @@ button, input, select { font: inherit; }
 button { color: inherit; }
 
 .app-shell { height: 100%; display: grid; grid-template-rows: 64px minmax(0, 1fr); }
-.topbar { display: grid; grid-template-columns: 270px 1fr auto; align-items: center; border-bottom: 1px solid var(--line); background: #0e1216; padding: 0 18px; z-index: 3; }
+.topbar { display: grid; grid-template-columns: 270px minmax(150px, 1fr) auto auto; align-items: center; gap: 12px; border-bottom: 1px solid var(--line); background: #0e1216; padding: 0 18px; z-index: 3; }
 .brand { display: flex; align-items: center; gap: 11px; min-width: 0; }
 .brand-mark { display: grid; place-items: center; width: 30px; height: 30px; border: 1px solid #53636e; border-radius: 8px; color: var(--accent); font-size: 12px; font-weight: 800; letter-spacing: .06em; }
 .brand-copy { min-width: 0; }
@@ -29,6 +29,10 @@ button { color: inherit; }
 .brand-subtitle { color: var(--muted); font-size: 11px; margin-top: 2px; }
 .project-name { justify-self: center; display: flex; align-items: center; gap: 9px; font-size: 13px; font-weight: 650; }
 .saved-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--cyan); box-shadow: 0 0 0 3px rgb(84 214 199 / 10%); }
+.project-summary { display: flex; align-items: stretch; gap: 6px; }
+.top-metric { min-width: 86px; display: grid; align-content: center; gap: 2px; min-height: 48px; border: 1px solid #202a31; border-radius: 7px; background: #10161a; padding: 6px 10px; }
+.top-metric span { color: var(--muted); font-size: 8px; white-space: nowrap; }
+.top-metric strong { color: var(--text); font-size: 12px; white-space: nowrap; }
 .top-actions { display: flex; gap: 8px; }
 
 .workspace-shell { min-height: 0; display: grid; grid-template-columns: 68px minmax(0, 1fr) 300px; }
@@ -280,9 +284,21 @@ button { color: inherit; }
   .workspace-shell { grid-template-columns: 58px minmax(0, 1fr); }
   .inspector { position: absolute; right: 0; top: 64px; bottom: 0; width: 280px; box-shadow: -20px 0 50px rgb(0 0 0 / 25%); transform: translateX(100%); transition: transform .2s ease; }
   .inspector.open { transform: translateX(0); }
-  .topbar { grid-template-columns: 1fr auto; }
+  .topbar { grid-template-columns: 1fr auto auto; gap: 8px; padding: 0 10px; }
   .project-name { display: none; }
+  .top-metric { min-width: 72px; padding-inline: 7px; }
+  .top-metric strong { font-size: 11px; }
   .tool-button { width: 40px; }
+}
+
+@media (max-width: 650px) {
+  .brand-name { font-size: 11px; }
+  .brand-subtitle { display: none; }
+  .project-summary { gap: 4px; }
+  .top-metric { min-width: 64px; min-height: 44px; padding: 5px 6px; }
+  .top-metric span { font-size: 7px; }
+  .top-metric strong { font-size: 10px; }
+  .top-actions .button { padding-inline: 8px; font-size: 10px; }
 }
 
 @media (pointer: coarse) {
