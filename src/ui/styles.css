@@ -212,21 +212,11 @@ button { color: inherit; }
 .inspector-section { padding: 18px; border-bottom: 1px solid var(--line); }
 .eyebrow { color: var(--accent); text-transform: uppercase; font-size: 10px; font-weight: 800; letter-spacing: .13em; }
 .inspector h2 { margin: 8px 0 5px; font-size: 18px; letter-spacing: -.02em; }
-.progress-section { background: linear-gradient(145deg, rgb(216 255 98 / 5%), transparent 60%); }
-.progress-heading, .object-status { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
-.progress-heading h2, .object-status h2 { margin-bottom: 5px; }
-.level-badge, .object-badge { flex: 0 0 auto; border: 1px solid #39454d; border-radius: 999px; padding: 4px 7px; color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
+.object-status { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.object-status h2 { margin-bottom: 5px; }
+.object-badge { flex: 0 0 auto; border: 1px solid #39454d; border-radius: 999px; padding: 4px 7px; color: var(--muted); font-size: 9px; font-weight: 800; text-transform: uppercase; letter-spacing: .06em; }
 .object-badge.established { border-color: rgb(216 255 98 / 38%); color: var(--accent); background: rgb(216 255 98 / 7%); }
 .object-badge.review { border-color: rgb(84 214 199 / 40%); color: var(--cyan); }
-.maturity-track { display: grid; grid-template-columns: repeat(4, 1fr); gap: 3px; margin: 16px 0 13px; }
-.maturity-step { min-width: 0; }
-.maturity-step span { display: block; height: 3px; border-radius: 2px; background: #2b343a; margin-bottom: 6px; }
-.maturity-step small { display: block; color: #687780; font-size: 8px; line-height: 1.25; }
-.maturity-step.complete span { background: var(--accent); }
-.maturity-step.complete small { color: #c8d3d5; }
-.maturity-step.review span, .maturity-step.next span { background: var(--cyan); }
-.maturity-step.review small, .maturity-step.next small { color: #9db8bb; }
-.progress-action { width: 100%; margin-top: 3px; }
 .continuity-note { margin-top: 10px; text-align: center; color: #75858e; font-size: 9px; text-transform: uppercase; letter-spacing: .08em; }
 .section-copy { margin: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .vertex-guidance { display: flex; align-items: center; gap: 9px; margin-top: 13px; padding: 9px 10px; border: 1px solid #2c373d; border-radius: 7px; background: #0e1317; color: var(--muted); font-size: 10px; line-height: 1.35; }
