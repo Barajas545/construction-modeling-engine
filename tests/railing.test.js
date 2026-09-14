@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { analyzeRailingGeometries, computeRailingLayout, createRailingLine, createRailingRun, deriveRailingGeometry, deriveRailingLineGeometry, projectPointToEdge, resolveRailingEndpointSnap, updateRailingSettings } from '../src/tools/railing/railing.js';
+import { analyzeRailingGeometries, computeRailingLayout, createRailingLine, createRailingRun, deriveRailingGeometry, deriveRailingLineGeometry, deriveRailingPostLayout, projectPointToEdge, resolveRailingEndpointSnap, updateRailingSettings } from '../src/tools/railing/railing.js';
 
 test('uses the fewest equal sections that keep clear span at or below six feet', () => {
   const cases = [[60, 1], [96, 2], [144, 2], [156, 3], [192, 3], [240, 4], [300, 4]];
@@ -28,7 +28,7 @@ test('stores a railing as normalized references and derives posts from current g
   assert.deepEqual(geometry.end, { x: 180, y: 0 });
 });
 
-test('connected perpendicular runs share a visible post and default their corner to exterior', () => {
+test('connected perpendicular runs count only visible posts until their shared corner is explicitly doubled', () => {
   const first = createRailingRun({ boundaryId: 'deck-1', edgeId: 'edge-1' }, 0, 1, {}, () => 'r1');
   const second = createRailingRun({ boundaryId: 'deck-1', edgeId: 'edge-2' }, 0, 1, {}, () => 'r2');
   const geometries = [
@@ -37,9 +37,41 @@ test('connected perpendicular runs share a visible post and default their corner
   ];
   const analysis = analyzeRailingGeometries(geometries);
   assert.equal(analysis.visiblePostCount, 5);
-  assert.equal(analysis.exteriorCornerCount, 1);
-  assert.equal(analysis.estimatedPostCount, 6);
-  assert.equal(analysis.corners[0].classification, 'exterior');
+  assert.equal(analysis.doubleCornerCount, 0);
+  assert.equal(analysis.estimatedPostCount, 5);
+  assert.equal(analysis.corners[0].classification, 'single');
+
+  const cornerId = analysis.corners[0].id;
+  const doubled = analyzeRailingGeometries(geometries, { [cornerId]: { double: true } });
+  const layout = deriveRailingPostLayout(geometries, { [cornerId]: { double: true } });
+  const cornerPost = layout.posts.find((post) => post.cornerId === cornerId);
+  assert.equal(doubled.visiblePostCount, 6);
+  assert.equal(doubled.doubleCornerCount, 1);
+  assert.equal(doubled.estimatedPostCount, 6);
+  assert.equal(cornerPost.markers.length, 2);
+  assert.deepEqual(cornerPost.markers.map(({ x, y }) => ({ x, y })), [{ x: 140.5, y: 0 }, { x: 144, y: 3.5 }]);
+});
+
+test('a double corner equalizes both runs and removes intermediate posts that are no longer required', () => {
+  const first = createRailingRun({ boundaryId: 'deck-1', edgeId: 'edge-1' }, 0, 1, {}, () => 'r1');
+  const second = createRailingRun({ boundaryId: 'deck-1', edgeId: 'edge-2' }, 0, 1, {}, () => 'r2');
+  const geometries = [
+    deriveRailingGeometry(first, { x: 0, y: 0 }, { x: 152, y: 0 }),
+    deriveRailingGeometry(second, { x: 152, y: 0 }, { x: 152, y: 152 }),
+  ];
+  const initial = analyzeRailingGeometries(geometries);
+  const cornerId = initial.corners[0].id;
+  const doubled = analyzeRailingGeometries(geometries, { [cornerId]: { double: true } });
+  assert.equal(initial.sectionCount, 6);
+  assert.equal(initial.visiblePostCount, 7);
+  assert.equal(doubled.sectionCount, 4);
+  assert.equal(doubled.visiblePostCount, 6);
+  doubled.geometries.forEach((geometry) => {
+    assert.equal(geometry.sectionCount, 2);
+    const intervals = geometry.posts.slice(1).map((post, index) => Math.hypot(post.x - geometry.posts[index].x, post.y - geometry.posts[index].y));
+    assert.ok(intervals.every((interval) => Math.abs(interval - intervals[0]) < 1e-8));
+    assert.ok(geometry.clearSpan <= 72);
+  });
 });
 
 test('free railing lines preserve independent snapped endpoints', () => {

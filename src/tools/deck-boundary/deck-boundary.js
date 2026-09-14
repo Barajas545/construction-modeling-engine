@@ -152,6 +152,8 @@ export function moveVertexWithConstraints(boundary, vertexId, position) {
 }
 
 function assertVertexEditable(boundary, vertexId) {
+  if (Object.values(boundary.metadata?.archLines ?? {}).some((arc) => arc.startVertexId === vertexId || arc.endVertexId === vertexId)
+    || boundary.vertices.find((v) => v.id === vertexId)?.archLineId) throw new Error('Use Arch line to reshape the curve, or Straighten before editing its corners.');
   const index = boundary.vertices.findIndex((vertex) => vertex.id === vertexId);
   if (index < 0) throw new Error('Boundary corner was not found.');
   if (isVertexLocked(boundary, vertexId)) throw new Error('Unlock this corner before moving it.');
@@ -189,6 +191,7 @@ export function getBoundaryLifecycle(boundary) {
 }
 
 export function insertVertex(boundary, edgeId, position, idFactory = defaultId) {
+  if (boundary.edges.find((edge) => edge.id === edgeId)?.metadata?.archLineId) throw new Error('Straighten the arc before inserting a corner.');
   const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
   if (edgeIndex < 0) throw new Error('Deck boundary edge was not found.');
   if (isEdgeLocked(boundary, edgeId)) throw new Error('Unlock this construction edge before splitting it.');
@@ -204,6 +207,7 @@ export function insertVertex(boundary, edgeId, position, idFactory = defaultId) 
 }
 
 export function splitEdgeIntoSegments(boundary, edgeId, segmentCount, idFactory = defaultId) {
+  if (boundary.edges.find((edge) => edge.id === edgeId)?.metadata?.archLineId) throw new Error('Straighten the arc before splitting it.');
   if (![2, 3].includes(segmentCount)) throw new Error('A construction edge can be divided into two or three segments.');
   const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
   if (edgeIndex < 0) throw new Error('Deck boundary edge was not found.');
@@ -306,6 +310,7 @@ export function getBoundaryCentroid(boundary) {
 }
 
 export function orthogonalizeBoundary(boundary) {
+  if (Object.keys(boundary.metadata?.archLines ?? {}).length) throw new Error('Straighten curved edges before applying 90-degree conversion.');
   if (boundary.vertices.some((vertex) => vertex.locked) || boundary.edges.some((edge) => isEdgeLocked(boundary, edge.id))) throw new Error('Unlock boundary nodes and edges before making all corners 90°.');
   const count = boundary.vertices.length;
   const xParent = Array.from({ length: count }, (_, index) => index);
@@ -409,6 +414,7 @@ export function mergeAdjacentVertices(boundary, sourceVertexId, targetVertexId) 
 }
 
 export function setEdgeRole(boundary, edgeId, role) {
+  if (boundary.edges.find((edge) => edge.id === edgeId)?.metadata?.archLineId) throw new Error('Straighten the arc before changing its construction role.');
   const allowedRoles = ['open', 'house', 'free-edge'];
   if (!allowedRoles.includes(role)) throw new Error(`Unsupported deck edge role: ${role}`);
   return {
@@ -422,6 +428,16 @@ export function setEdgeRole(boundary, edgeId, role) {
 }
 
 export function updateEdgeProperties(boundary, edgeId, patch) {
+  const root = boundary.edges.find((edge) => edge.id === edgeId)?.metadata?.archLineId;
+  const arc = boundary.metadata?.archLines?.[root];
+  if (arc) {
+    const unsupportedAttachments = Object.keys(patch.attachments ?? {}).some((key) => key !== 'rimJoist');
+    if (unsupportedAttachments || patch.classification || patch.custom?.orientationConstraint || patch.custom?.geometricConstraint) throw new Error('Straighten the arc before adding straight construction relationships.');
+    const originalEdge = normalizeBoundaryEdge({ ...arc.originalEdge, properties: mergeEdgeProperties(arc.originalEdge.properties, patch) });
+    return { ...boundary,
+      edges: boundary.edges.map((edge) => edge.metadata?.archLineId === root ? normalizeBoundaryEdge({ ...edge, properties: mergeEdgeProperties(edge.properties, patch) }) : edge),
+      metadata: { ...boundary.metadata, archLines: { ...boundary.metadata.archLines, [root]: { ...arc, originalEdge } } } };
+  }
   return {
     ...boundary,
     edges: boundary.edges.map((edge) => edge.id === edgeId
@@ -456,6 +472,8 @@ export function offsetEdge(boundary, edgeId, offset) {
   const start = boundary.vertices[index];
   const endIndex = (index + 1) % boundary.vertices.length;
   const end = boundary.vertices[endIndex];
+  assertVertexEditable(boundary, start.id);
+  assertVertexEditable(boundary, end.id);
   if (isVertexLocked(boundary, start.id) || isVertexLocked(boundary, end.id)) throw new Error('Unlock both edge nodes before moving this construction edge.');
   const previousEdge = boundary.edges[(index - 1 + boundary.edges.length) % boundary.edges.length];
   const nextEdge = boundary.edges[endIndex];
@@ -492,6 +510,7 @@ export function offsetEdge(boundary, edgeId, offset) {
 }
 
 export function setEdgeOrientationConstraint(boundary, edgeId, constraint) {
+  if (boundary.edges.find((edge) => edge.id === edgeId)?.metadata?.archLineId) throw new Error('Straighten the arc before constraining its angle.');
   if (!['horizontal', 'vertical', 'fixed-angle'].includes(constraint)) throw new Error(`Unsupported edge constraint: ${constraint}`);
   const index = boundary.edges.findIndex((edge) => edge.id === edgeId);
   if (index < 0) throw new Error('Deck boundary edge was not found.');
@@ -538,7 +557,7 @@ export function validateDeckBoundary(boundary) {
   if (boundary.vertices.length < 3) issues.push({ code: 'too-few-vertices', severity: 'error', message: 'Add at least three corners.' });
   boundary.vertices.forEach((vertex, index) => {
     const next = boundary.vertices[(index + 1) % boundary.vertices.length];
-    if (next && distance(vertex, next) < MIN_EDGE_LENGTH) {
+    if (next && distance(vertex, next) < MIN_EDGE_LENGTH && !boundary.metadata?.archLines?.[boundary.edges[index]?.metadata?.archLineId]) {
       issues.push({ code: 'short-edge', severity: 'error', edgeId: boundary.edges[index]?.id, message: 'An edge is shorter than 6 inches.' });
     }
     const constraint = boundary.edges[index] ? getEdgeOrientationConstraint(boundary, boundary.edges[index].id) : null;

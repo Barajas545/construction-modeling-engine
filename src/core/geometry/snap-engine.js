@@ -1,4 +1,5 @@
 import { distance, nearestPointOnSegment } from './vector.js';
+import { getBoundaryArc } from './circular-arc.js';
 
 const priority = { endpoint: 0, 'node-intersection': 1, 'node-inference': 2, midpoint: 3, alignment: 4, angle: 5, edge: 6, grid: 7, none: 99 };
 const INFERENCE_ANGLES = Array.from({ length: 8 }, (_, index) => index * Math.PI / 8);
@@ -9,12 +10,17 @@ export function collectSnapTargets(objects = []) {
   objects.forEach((object) => {
     const sourcePriority = Number(object.snapPriority ?? 0);
     const prefix = object.snapSource === 'cat' ? 'CAT ' : '';
-    object.vertices?.forEach((vertex) => targets.push({ type: 'endpoint', point: vertex, referenceId: vertex.id, sourcePriority, label: `${prefix}node` }));
+    object.vertices?.filter((vertex) => !vertex.archLineId).forEach((vertex) => targets.push({ type: 'endpoint', point: vertex, referenceId: vertex.id, sourcePriority, label: `${prefix}node` }));
     object.edges?.forEach((edge, index) => {
       const start = object.vertices[index];
       const end = object.vertices[(index + 1) % object.vertices.length];
       if (!start || !end) return;
-      targets.push({ type: 'midpoint', point: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }, referenceId: edge.id, sourcePriority, label: `${prefix}midpoint` });
+      const arc = getBoundaryArc(object, edge.id);
+      if (!arc) targets.push({ type: 'midpoint', point: { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 }, referenceId: edge.id, sourcePriority, label: `${prefix}midpoint` });
+      else if (edge.id === arc.id) {
+        targets.push({ type: 'midpoint', point: arc.apex, referenceId: arc.id, sourcePriority, label: 'Arc midpoint' });
+        targets.push({ type: 'midpoint', point: arc.midpoint, referenceId: `${arc.id}:chord`, sourcePriority, label: 'Chord midpoint' });
+      }
       targets.push({ type: 'edge', start, end, referenceId: edge.id, sourcePriority, label: `${prefix}edge` });
     });
   });

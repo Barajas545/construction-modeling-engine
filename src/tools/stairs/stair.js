@@ -1,9 +1,10 @@
 import { combineEdgeProperties, createEdgeProperties, mergeEdgeProperties, normalizeBoundaryEdge } from '../../core/construction-objects/edge-properties.js';
 import { distance } from '../../core/geometry/vector.js';
+import { DEFAULT_STAIR_TREAD_DEPTH, getStairCoveringStyle } from './stair-covering.js';
 import { validateDeckBoundary, withComputedProperties } from '../deck-boundary/deck-boundary.js';
 
 export const STAIR_TYPE = 'stair';
-export const STAIR_SCHEMA_VERSION = 2;
+export const STAIR_SCHEMA_VERSION = 3;
 export const MIN_RISER_HEIGHT = 5;
 export const PREFERRED_MIN_RISER_HEIGHT = 6;
 export const MAX_RISER_HEIGHT = 7.5;
@@ -20,7 +21,7 @@ function signedTwiceArea(vertices) {
   }, 0);
 }
 
-export function calculateStairLayout(totalRise, targetRiserHeight = MAX_RISER_HEIGHT, treadDepth = 10) {
+export function calculateStairLayout(totalRise, targetRiserHeight = MAX_RISER_HEIGHT, treadDepth = DEFAULT_STAIR_TREAD_DEPTH) {
   const limitedRiserHeight = Math.min(targetRiserHeight, MAX_RISER_HEIGHT);
   const riserCount = Math.max(2, Math.ceil(totalRise / limitedRiserHeight));
   const treadCount = riserCount - 1;
@@ -48,7 +49,7 @@ export function solveStairLayout(totalRise, options = {}) {
   const targetRiserHeight = Math.min(MAX_RISER_HEIGHT, Math.max(PREFERRED_MIN_RISER_HEIGHT, Number(options.targetRiserHeight ?? 7)));
   const chosen = preserved ?? pool.sort((a, b) => Math.abs(a.riserHeight - targetRiserHeight) - Math.abs(b.riserHeight - targetRiserHeight))[0];
   const treadCount = chosen.riserCount - 1;
-  const treadDepth = Math.min(MAX_TREAD_DEPTH, Math.max(MIN_TREAD_DEPTH, Number(options.treadDepth ?? 10.5)));
+  const treadDepth = Math.min(MAX_TREAD_DEPTH, Math.max(MIN_TREAD_DEPTH, Number(options.treadDepth ?? DEFAULT_STAIR_TREAD_DEPTH)));
   return {
     stepCount: chosen.riserCount,
     riserCount: chosen.riserCount,
@@ -164,8 +165,9 @@ export function findStairBoundaryConnection(sourceBoundary, edgeId, opening, can
     if (!baseLayout) continue;
     const pointerRun = (pointer.x - start.x) * normal.x + (pointer.y - start.y) * normal.y;
     const preferredDepth = Math.min(MAX_TREAD_DEPTH, Math.max(MIN_TREAD_DEPTH, pointerRun / baseLayout.treadCount));
-    const depthCandidates = [...new Set([preferredDepth, 10, 10.25, 10.5, 10.75, 11].map((value) => Number(value.toFixed(4))))]
-      .sort((a, b) => Math.abs(a - preferredDepth) - Math.abs(b - preferredDepth));
+    // Prefer the 11-inch recipe, falling back only when the lower landing cannot fit it.
+    const depthCandidates = [DEFAULT_STAIR_TREAD_DEPTH, ...[...new Set([preferredDepth, 10, 10.25, 10.5, 10.75].map((value) => Number(value.toFixed(4))))]
+      .sort((a, b) => Math.abs(a - preferredDepth) - Math.abs(b - preferredDepth))];
     for (const treadDepth of depthCandidates) {
       const layout = solveStairLayout(totalRise, { treadDepth, previousRiserCount: baseLayout.riserCount });
       const outerStart = { x: start.x + unit.x * openingStart + normal.x * layout.totalRun, y: start.y + unit.y * openingStart + normal.y * layout.totalRun };
@@ -207,7 +209,7 @@ export function synchronizeConnectedStairLevels(document) {
     if (!layout) { invalid(`No equal riser layout fits ${MIN_RISER_HEIGHT}″–${MAX_RISER_HEIGHT}″.`); continue; }
     const regenerated = regenerateStairGeometry(source, stair, layout);
     if (!regenerated) { invalid('Stair geometry can no longer regenerate from its host edge.'); continue; }
-    const byId = new Map(regenerated.boundary.vertices.map((vertex) => [vertex.id, vertex]));
+    const byId = getStairVertexMap(regenerated.boundary, regenerated.stair);
     const outerStart = byId.get(stair.anchors.outerStartVertexId);
     const outerEnd = byId.get(stair.anchors.outerEndVertexId);
     if (!outerStart || !outerEnd || !lineInsidePolygon(outerStart, outerEnd, destination.vertices)) {
@@ -228,6 +230,84 @@ export function synchronizeConnectedStairLevels(document) {
     };
   }
   return { ...document, objects };
+}
+
+export function synchronizeHostedStairs(document) {
+  let objects = [...document.objects];
+  // One-time migration for projects saved by the former topology-cutting model.
+  // Capture the stair footprint first, then restore the original host edge.
+  for (const legacy of objects.filter((object) => object.type === STAIR_TYPE && object.geometry?.ownership !== 'stair')) {
+    const stairIndex = objects.findIndex((object) => object.id === legacy.id);
+    let migratingStair = objects[stairIndex];
+    for (const side of ['start', 'end']) {
+      const attachment = migratingStair.sideAttachments?.[side];
+      const targetIndex = objects.findIndex((object) => object.type === 'deck-boundary' && object.id === attachment?.boundaryId);
+      if (targetIndex < 0 || !attachment?.junction) continue;
+      const disconnected = removeStairSideJunction(objects[targetIndex], migratingStair, side);
+      objects[targetIndex] = disconnected.boundary;
+      migratingStair = disconnected.stair;
+      objects[stairIndex] = migratingStair;
+    }
+    const boundaryIndex = objects.findIndex((object) => object.type === 'deck-boundary' && object.id === migratingStair.host?.boundaryId);
+    if (boundaryIndex < 0) continue;
+    const hostBoundary = objects[boundaryIndex];
+    const vertices = getStairVertices(hostBoundary, migratingStair);
+    if (vertices.length !== 4) continue;
+    try {
+      const restored = detachStairFromBoundary(hostBoundary, migratingStair);
+      const edgeIndex = restored.edges.findIndex((edge) => edge.id === migratingStair.host?.sourceEdgeId)
+        >= 0 ? restored.edges.findIndex((edge) => edge.id === migratingStair.host?.sourceEdgeId) : 0;
+      const edgeStart = restored.vertices[edgeIndex];
+      const edgeEnd = restored.vertices[(edgeIndex + 1) % restored.vertices.length];
+      const edgeLength = distance(edgeStart, edgeEnd);
+      const unit = { x: (edgeEnd.x - edgeStart.x) / edgeLength, y: (edgeEnd.y - edgeStart.y) / edgeLength };
+      const openingStart = vertices[0];
+      const openingEnd = vertices[3];
+      const startOffset = (openingStart.x - edgeStart.x) * unit.x + (openingStart.y - edgeStart.y) * unit.y;
+      const endOffset = (openingEnd.x - edgeStart.x) * unit.x + (openingEnd.y - edgeStart.y) * unit.y;
+      objects[boundaryIndex] = restored;
+      objects[stairIndex] = {
+        ...migratingStair,
+        schemaVersion: STAIR_SCHEMA_VERSION,
+        host: { ...migratingStair.host, relationship: 'hosted-on-boundary-edge', startParameter: startOffset / edgeLength, endParameter: endOffset / edgeLength },
+        geometry: { schemaVersion: 1, ownership: 'stair', vertices: vertices.map((vertex, order) => ({ ...vertex, order })) },
+        generatedEdgeIds: [],
+      };
+    } catch { /* Keep an incomplete legacy stair visible for manual review. */ }
+  }
+  const boundaries = new Map(objects.filter((object) => object.type === 'deck-boundary').map((boundary) => [boundary.id, boundary]));
+  return {
+    ...document,
+    objects: objects.map((object) => {
+      if (object.type !== STAIR_TYPE || object.geometry?.ownership !== 'stair') return object;
+      const boundary = boundaries.get(object.host?.boundaryId);
+      const edgeIndex = boundary?.edges.findIndex((edge) => edge.id === object.host?.sourceEdgeId) ?? -1;
+      if (!boundary || edgeIndex < 0) return { ...object, lifecycle: { ...object.lifecycle, needsReview: true, reviewReason: 'Stair host edge is missing.' } };
+      const start = boundary.vertices[edgeIndex];
+      const end = boundary.vertices[(edgeIndex + 1) % boundary.vertices.length];
+      const hostLength = distance(start, end);
+      if (hostLength < 1e-8) return object;
+      const unit = { x: (end.x - start.x) / hostLength, y: (end.y - start.y) / hostLength };
+      const outwardSign = signedTwiceArea(boundary.vertices) >= 0 ? 1 : -1;
+      const normal = { x: unit.y * outwardSign, y: -unit.x * outwardSign };
+      const startParameter = Number.isFinite(object.host.startParameter) ? object.host.startParameter : Number(object.dimensions?.startOffset ?? 0) / hostLength;
+      const endParameter = Number.isFinite(object.host.endParameter) ? object.host.endParameter : (Number(object.dimensions?.startOffset ?? 0) + Number(object.dimensions?.width ?? 0)) / hostLength;
+      const openingStart = { x: start.x + unit.x * hostLength * startParameter, y: start.y + unit.y * hostLength * startParameter };
+      const openingEnd = { x: start.x + unit.x * hostLength * endParameter, y: start.y + unit.y * hostLength * endParameter };
+      const run = Number(object.dimensions?.totalRun ?? 0);
+      const positions = new Map([
+        [object.anchors.openingStartVertexId, openingStart],
+        [object.anchors.openingEndVertexId, openingEnd],
+        [object.anchors.outerStartVertexId, { x: openingStart.x + normal.x * run, y: openingStart.y + normal.y * run }],
+        [object.anchors.outerEndVertexId, { x: openingEnd.x + normal.x * run, y: openingEnd.y + normal.y * run }],
+      ]);
+      return {
+        ...object,
+        host: { ...object.host, angleRadians: Math.atan2(end.y - start.y, end.x - start.x) },
+        geometry: { ...object.geometry, vertices: object.geometry.vertices.map((vertex, order) => ({ ...vertex, ...positions.get(vertex.id), order })) },
+      };
+    }),
+  };
 }
 
 function nearestOnSegment(point, start, end) {
@@ -286,7 +366,7 @@ export function validateStairPlacement(boundary, edgeId, options) {
 }
 
 export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory = defaultId) {
-  const settings = { width: 36, totalRise: 36, treadDepth: 10.5, targetRiserHeight: 7, ...options };
+  const settings = { width: 36, totalRise: 36, treadDepth: DEFAULT_STAIR_TREAD_DEPTH, targetRiserHeight: 7, ...options };
   const validation = validateStairPlacement(boundary, edgeId, settings);
   if (!validation.valid) throw new Error(validation.issues.join(' '));
   const edgeIndex = boundary.edges.findIndex((edge) => edge.id === edgeId);
@@ -298,12 +378,6 @@ export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory 
   const outwardSign = signedTwiceArea(boundary.vertices) >= 0 ? 1 : -1;
   const normal = { x: unit.y * outwardSign, y: -unit.x * outwardSign };
   const stairId = idFactory('stair');
-  const sourceEdge = normalizeBoundaryEdge({
-    ...originalSourceEdge,
-    properties: mergeEdgeProperties(originalSourceEdge.properties, {
-      custom: { stairHostId: stairId, orientationConstraint: { type: 'fixed-angle', angleRadians: Math.atan2(end.y - start.y, end.x - start.x) } },
-    }),
-  });
   const calculatedLayout = solveStairLayout(settings.totalRise, { targetRiserHeight: settings.targetRiserHeight, treadDepth: settings.treadDepth });
   if (!calculatedLayout) throw new Error(`No equal riser layout fits ${MIN_RISER_HEIGHT}″–${MAX_RISER_HEIGHT}″.`);
   const layout = Number.isInteger(settings.riserCount) && settings.riserCount >= 2
@@ -319,29 +393,20 @@ export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory 
   const margin = settings.startOffset ?? (length - settings.width) / 2;
   const snappedStart = margin <= 1e-8;
   const snappedEnd = margin + settings.width >= length - 1e-8;
-  const openingStart = snappedStart ? start : { id: idFactory('vertex'), x: start.x + unit.x * margin, y: start.y + unit.y * margin, elevation: 0 };
-  const openingEnd = snappedEnd ? end : { id: idFactory('vertex'), x: start.x + unit.x * (margin + settings.width), y: start.y + unit.y * (margin + settings.width), elevation: 0 };
+  // Stair vertices are owned by the stair. Even when a side is coincident with a
+  // Deck Boundary corner, it keeps a separate identity so the host polygon is
+  // never split, reshaped, or transferred to the stair.
+  const openingStart = { id: idFactory('stair-vertex'), x: start.x + unit.x * margin, y: start.y + unit.y * margin, elevation: 0 };
+  const openingEnd = { id: idFactory('stair-vertex'), x: start.x + unit.x * (margin + settings.width), y: start.y + unit.y * (margin + settings.width), elevation: 0 };
   const outerStart = { id: idFactory('vertex'), x: openingStart.x + normal.x * layout.totalRun, y: openingStart.y + normal.y * layout.totalRun, elevation: -settings.totalRise };
   const outerEnd = { id: idFactory('vertex'), x: openingEnd.x + normal.x * layout.totalRun, y: openingEnd.y + normal.y * layout.totalRun, elevation: -settings.totalRise };
-  const vertices = [...boundary.vertices.slice(0, edgeIndex + 1), ...(!snappedStart ? [openingStart] : []), outerStart, outerEnd, ...(!snappedEnd ? [openingEnd] : []), ...boundary.vertices.slice(edgeIndex + 1)].map((vertex, order) => ({ ...vertex, order }));
-  const generated = new Map();
-  if (!snappedStart) generated.set(`${start.id}:${openingStart.id}`, normalizeBoundaryEdge({ ...sourceEdge, id: sourceEdge.id, endVertexId: openingStart.id }));
-  generated.set(`${openingStart.id}:${outerStart.id}`, stairEdge(snappedStart ? sourceEdge.id : idFactory('edge'), openingStart.id, outerStart.id, stairId, 'left-stringer'));
-  generated.set(`${outerStart.id}:${outerEnd.id}`, stairEdge(idFactory('edge'), outerStart.id, outerEnd.id, stairId, 'lower-landing-edge'));
-  generated.set(`${outerEnd.id}:${openingEnd.id}`, stairEdge(idFactory('edge'), outerEnd.id, openingEnd.id, stairId, 'right-stringer'));
-  if (!snappedEnd) generated.set(`${openingEnd.id}:${end.id}`, normalizeBoundaryEdge({ ...sourceEdge, id: idFactory('edge'), startVertexId: openingEnd.id }));
-  const oldByPair = new Map(boundary.edges.map((edge) => [`${edge.startVertexId}:${edge.endVertexId}`, normalizeBoundaryEdge(edge)]));
-  const edges = vertices.map((vertex, index) => {
-    const next = vertices[(index + 1) % vertices.length];
-    return generated.get(`${vertex.id}:${next.id}`)
-      ?? oldByPair.get(`${vertex.id}:${next.id}`)
-      ?? normalizeBoundaryEdge({ id: idFactory('edge'), startVertexId: vertex.id, endVertexId: next.id, role: 'open', metadata: {}, properties: createEdgeProperties() });
-  });
+  const vertices = [openingStart, outerStart, outerEnd, openingEnd].map((vertex, order) => ({ ...vertex, order }));
   const stair = {
     type: STAIR_TYPE,
     schemaVersion: STAIR_SCHEMA_VERSION,
     id: stairId,
     name: options.name ?? 'Main stairs',
+    covering: { schemaVersion: 1, style: getStairCoveringStyle(options) },
     host: {
       boundaryId: boundary.id,
       sourceEdgeId: edgeId,
@@ -349,9 +414,13 @@ export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory 
       originalEndVertexId: end.id,
       angleRadians: Math.atan2(end.y - start.y, end.x - start.x),
       sourceEdge: normalizeBoundaryEdge(originalSourceEdge),
+      relationship: 'hosted-on-boundary-edge',
+      startParameter: margin / length,
+      endParameter: (margin + settings.width) / length,
     },
     destination: settings.destination ? { ...settings.destination, relationship: 'lower-deck-area-landing', landing: settings.landing ?? settings.destination.landing ?? null } : null,
     anchors: { openingStartVertexId: openingStart.id, outerStartVertexId: outerStart.id, outerEndVertexId: outerEnd.id, openingEndVertexId: openingEnd.id },
+    geometry: { schemaVersion: 1, ownership: 'stair', vertices },
     interfaceEdge: normalizeBoundaryEdge({
       type: 'stair-interface-edge',
       id: idFactory('edge'),
@@ -361,11 +430,22 @@ export function attachStairToBoundary(boundary, edgeId, options = {}, idFactory 
       metadata: { generatedBy: stairId, interface: 'deck-to-stair' },
       properties: createEdgeProperties({ classification: { relationship: 'stair-interface', exterior: true }, attachments: { stairId, stairComponent: 'deck-interface' } }),
     }),
-    generatedEdgeIds: edges.filter((edge) => edge.properties?.attachments?.stairId === stairId).map((edge) => edge.id),
+    generatedEdgeIds: [],
     dimensions: { width: settings.width, startOffset: margin, snappedStart, snappedEnd, totalRise: settings.totalRise, ...layout },
     lifecycle: { phase: 'established', revision: 1, needsReview: false, reviewReason: null },
   };
-  return { boundary: withComputedProperties({ ...boundary, vertices, edges }), stair };
+  return { boundary, stair };
+}
+
+export function getStairVertices(boundary, stair) {
+  if (Array.isArray(stair?.geometry?.vertices) && stair.geometry.vertices.length >= 4) return stair.geometry.vertices;
+  const byId = new Map((boundary?.vertices ?? []).map((vertex) => [vertex.id, vertex]));
+  return [stair?.anchors?.openingStartVertexId, stair?.anchors?.outerStartVertexId, stair?.anchors?.outerEndVertexId, stair?.anchors?.openingEndVertexId]
+    .map((id) => byId.get(id)).filter(Boolean);
+}
+
+export function getStairVertexMap(boundary, stair) {
+  return new Map(getStairVertices(boundary, stair).map((vertex) => [vertex.id, vertex]));
 }
 
 export function getStairInterfaceEdge(stair) {
@@ -390,7 +470,7 @@ export function updateStairInterfaceEdgeProperties(stair, patch) {
 }
 
 function regenerateStairGeometry(boundary, stair, layout) {
-  const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  const byId = getStairVertexMap(boundary, stair);
   const openingStart = byId.get(stair.anchors.openingStartVertexId);
   const openingEnd = byId.get(stair.anchors.openingEndVertexId);
   const outerStart = byId.get(stair.anchors.outerStartVertexId);
@@ -403,10 +483,12 @@ function regenerateStairGeometry(boundary, stair, layout) {
     [outerStart.id, { x: openingStart.x + normal.x * layout.totalRun, y: openingStart.y + normal.y * layout.totalRun, elevation: -layout.totalRise }],
     [outerEnd.id, { x: openingEnd.x + normal.x * layout.totalRun, y: openingEnd.y + normal.y * layout.totalRun, elevation: -layout.totalRise }],
   ]);
+  const stairVertices = getStairVertices(boundary, stair).map((vertex) => positions.has(vertex.id) ? { ...vertex, ...positions.get(vertex.id) } : vertex);
   return {
-    boundary: withComputedProperties({ ...boundary, vertices: boundary.vertices.map((vertex) => positions.has(vertex.id) ? { ...vertex, ...positions.get(vertex.id) } : vertex) }),
+    boundary,
     stair: {
       ...stair,
+      geometry: { schemaVersion: 1, ownership: 'stair', vertices: stairVertices.map((vertex, order) => ({ ...vertex, order })) },
       dimensions: { ...stair.dimensions, ...layout },
       lifecycle: { ...stair.lifecycle, revision: (stair.lifecycle?.revision ?? 1) + 1, needsReview: false, reviewReason: null },
     },
@@ -428,8 +510,6 @@ export function updateStairDimensions(boundary, stair, changes = {}) {
   if (!layout) throw new Error(`No equal riser layout fits ${MIN_RISER_HEIGHT}″–${MAX_RISER_HEIGHT}″.`);
   const regenerated = regenerateStairGeometry(boundary, stair, layout);
   if (!regenerated) throw new Error('Stair geometry is incomplete.');
-  const validation = validateDeckBoundary(regenerated.boundary);
-  if (!validation.valid) throw new Error(`Stair cannot regenerate: ${validation.issues[0].message}`);
   return regenerated;
 }
 
@@ -493,6 +573,64 @@ export function setStairSidePosition(boundary, stair, side, point, idFactoryOrBo
   const idFactory = Array.isArray(idFactoryOrBoundaries) ? defaultId : idFactoryOrBoundaries;
   const snapBoundaries = Array.isArray(idFactoryOrBoundaries) ? idFactoryOrBoundaries : candidateBoundaries;
   if (!['start', 'end'].includes(side)) throw new Error('Select a valid stair side.');
+  if (stair.geometry?.ownership === 'stair') {
+    const byId = getStairVertexMap(boundary, stair);
+    const topStart = byId.get(stair.anchors.openingStartVertexId);
+    const topEnd = byId.get(stair.anchors.openingEndVertexId);
+    const outerStart = byId.get(stair.anchors.outerStartVertexId);
+    const outerEnd = byId.get(stair.anchors.outerEndVertexId);
+    const hostEdgeIndex = boundary.edges.findIndex((edge) => edge.id === stair.host.sourceEdgeId);
+    const hostStart = boundary.vertices[hostEdgeIndex];
+    const hostEnd = boundary.vertices[(hostEdgeIndex + 1) % boundary.vertices.length];
+    if (![topStart, topEnd, outerStart, outerEnd, hostStart, hostEnd].every(Boolean)) throw new Error('Stair host references are incomplete.');
+    const hostLength = distance(hostStart, hostEnd);
+    const unit = { x: (hostEnd.x - hostStart.x) / hostLength, y: (hostEnd.y - hostStart.y) / hostLength };
+    const fixed = side === 'start' ? topEnd : topStart;
+    const fixedOffset = (fixed.x - hostStart.x) * unit.x + (fixed.y - hostStart.y) * unit.y;
+    let offset = (point.x - hostStart.x) * unit.x + (point.y - hostStart.y) * unit.y;
+    offset = side === 'start' ? Math.max(0, Math.min(fixedOffset - 24, offset)) : Math.max(fixedOffset + 24, Math.min(hostLength, offset));
+    const wasNodeSnapped = side === 'start' ? stair.dimensions.snappedStart : stair.dimensions.snappedEnd;
+    const wasBoundarySnapped = Boolean(stair.sideAttachments?.[side]);
+    const snapTarget = side === 'start' ? 0 : hostLength;
+    const shouldSnap = Math.abs(offset - snapTarget) <= STAIR_SIDE_SNAP_TOLERANCE;
+    const movingTop = side === 'start' ? topStart : topEnd;
+    const movingOuter = side === 'start' ? outerStart : outerEnd;
+    const boundarySnap = shouldSnap ? null : findStairSideBoundarySnap(
+      boundary,
+      stair,
+      offset,
+      hostStart,
+      unit,
+      movingTop,
+      movingOuter,
+      snapBoundaries,
+      wasBoundarySnapped ? STAIR_SIDE_RELEASE_TOLERANCE : STAIR_SIDE_SNAP_TOLERANCE,
+    );
+    offset = shouldSnap ? snapTarget : boundarySnap?.offset ?? offset;
+    const desired = { x: hostStart.x + unit.x * offset, y: hostStart.y + unit.y * offset };
+    const delta = { x: desired.x - movingTop.x, y: desired.y - movingTop.y };
+    const movedIds = new Set([movingTop.id, movingOuter.id]);
+    const vertices = stair.geometry.vertices.map((vertex, order) => movedIds.has(vertex.id)
+      ? { ...vertex, x: vertex.x + delta.x, y: vertex.y + delta.y, order }
+      : { ...vertex, order });
+    const width = side === 'start' ? fixedOffset - offset : offset - fixedOffset;
+    const startOffset = side === 'start' ? offset : fixedOffset;
+    const nextStair = {
+      ...stair,
+      geometry: { ...stair.geometry, vertices },
+      host: { ...stair.host, startParameter: startOffset / hostLength, endParameter: (startOffset + width) / hostLength },
+      sideAttachments: { ...stair.sideAttachments, [side]: boundarySnap ? { boundaryId: boundarySnap.boundaryId, edgeId: boundarySnap.edgeId, relationship: 'shared-boundary-reference' } : null },
+      dimensions: { ...stair.dimensions, width, startOffset, snappedStart: side === 'start' ? shouldSnap : stair.dimensions.snappedStart, snappedEnd: side === 'end' ? shouldSnap : stair.dimensions.snappedEnd },
+      lifecycle: { ...stair.lifecycle, revision: (stair.lifecycle?.revision ?? 1) + 1 },
+    };
+    return {
+      boundary,
+      stair: nextStair,
+      snap: shouldSnap ? { type: 'node', vertexId: (side === 'start' ? hostStart : hostEnd).id } : boundarySnap,
+      detachedFromNode: wasNodeSnapped && !shouldSnap,
+      detachedFromBoundary: wasBoundarySnapped && !boundarySnap,
+    };
+  }
   const wasNodeSnapped = side === 'start' ? stair.dimensions.snappedStart : stair.dimensions.snappedEnd;
   const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
   const topStart = byId.get(stair.anchors.openingStartVertexId);
@@ -580,7 +718,7 @@ export function setStairSidePosition(boundary, stair, side, point, idFactoryOrBo
 }
 
 function stairSidePoints(boundary, stair, side) {
-  const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  const byId = getStairVertexMap(boundary, stair);
   return {
     start: byId.get(side === 'start' ? stair.anchors.openingStartVertexId : stair.anchors.openingEndVertexId),
     end: byId.get(side === 'start' ? stair.anchors.outerStartVertexId : stair.anchors.outerEndVertexId),
@@ -595,6 +733,7 @@ function parameterOnLine(point, start, end) {
 }
 
 export function materializeStairSideJunction(hostBoundary, targetBoundary, stair, side, idFactory = defaultId) {
+  if (stair.geometry?.ownership === 'stair') return { boundary: targetBoundary, stair };
   const attachment = stair.sideAttachments?.[side];
   if (!attachment || attachment.boundaryId !== targetBoundary.id || attachment.junction) return { boundary: targetBoundary, stair };
   const edgeIndex = targetBoundary.edges.findIndex((edge) => edge.id === attachment.edgeId);
@@ -692,6 +831,7 @@ export function removeStairSideJunction(targetBoundary, stair, side) {
 }
 
 export function detachStairFromBoundary(boundary, stair, idFactory = defaultId) {
+  if (stair.geometry?.ownership === 'stair') return boundary;
   const removeIds = new Set([stair.anchors.outerStartVertexId, stair.anchors.outerEndVertexId]);
   if (!stair.dimensions.snappedStart) removeIds.add(stair.anchors.openingStartVertexId);
   if (!stair.dimensions.snappedEnd) removeIds.add(stair.anchors.openingEndVertexId);
@@ -710,6 +850,42 @@ export function detachStairFromBoundary(boundary, stair, idFactory = defaultId) 
 
 export function setStairWidth(boundary, stair, width) {
   if (!Number.isFinite(width) || width < 24) throw new Error('Stair width must be at least 24 inches.');
+  if (stair.geometry?.ownership === 'stair') {
+    const byId = getStairVertexMap(boundary, stair);
+    const anchors = stair.anchors;
+    const topStart = byId.get(anchors.openingStartVertexId);
+    const outerStart = byId.get(anchors.outerStartVertexId);
+    const outerEnd = byId.get(anchors.outerEndVertexId);
+    const topEnd = byId.get(anchors.openingEndVertexId);
+    if (![topStart, outerStart, outerEnd, topEnd].every(Boolean)) throw new Error('Stair anchors are incomplete.');
+    const currentWidth = distance(topStart, topEnd);
+    const unit = { x: (topEnd.x - topStart.x) / currentWidth, y: (topEnd.y - topStart.y) / currentWidth };
+    const topMid = { x: (topStart.x + topEnd.x) / 2, y: (topStart.y + topEnd.y) / 2 };
+    const outerMid = { x: (outerStart.x + outerEnd.x) / 2, y: (outerStart.y + outerEnd.y) / 2 };
+    const half = width / 2;
+    const positions = new Map([
+      [topStart.id, { x: topMid.x - unit.x * half, y: topMid.y - unit.y * half }],
+      [topEnd.id, { x: topMid.x + unit.x * half, y: topMid.y + unit.y * half }],
+      [outerStart.id, { x: outerMid.x - unit.x * half, y: outerMid.y - unit.y * half }],
+      [outerEnd.id, { x: outerMid.x + unit.x * half, y: outerMid.y + unit.y * half }],
+    ]);
+    const vertices = stair.geometry.vertices.map((vertex, order) => positions.has(vertex.id) ? { ...vertex, ...positions.get(vertex.id), order } : { ...vertex, order });
+    const hostEdgeIndex = boundary.edges.findIndex((edge) => edge.id === stair.host.sourceEdgeId);
+    const hostStart = boundary.vertices[hostEdgeIndex];
+    const hostEnd = boundary.vertices[(hostEdgeIndex + 1) % boundary.vertices.length];
+    const hostLength = hostStart && hostEnd ? distance(hostStart, hostEnd) : 0;
+    const startOffset = stair.dimensions.startOffset + (stair.dimensions.width - width) / 2;
+    return {
+      boundary,
+      stair: {
+        ...stair,
+        geometry: { ...stair.geometry, vertices },
+        host: hostLength ? { ...stair.host, startParameter: startOffset / hostLength, endParameter: (startOffset + width) / hostLength } : stair.host,
+        dimensions: { ...stair.dimensions, width, startOffset },
+        lifecycle: { ...stair.lifecycle, revision: (stair.lifecycle?.revision ?? 1) + 1 },
+      },
+    };
+  }
   if (stair.dimensions.snappedStart || stair.dimensions.snappedEnd) throw new Error('This stair side is snapped to an adjacent node. Move the node to change its width.');
   const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
   const anchors = stair.anchors;
@@ -761,7 +937,7 @@ function stairEdge(id, startVertexId, endVertexId, stairId, component) {
 }
 
 export function deriveStairTreads(boundary, stair) {
-  const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  const byId = getStairVertexMap(boundary, stair);
   const a = byId.get(stair.anchors.openingStartVertexId);
   const b = byId.get(stair.anchors.outerStartVertexId);
   const c = byId.get(stair.anchors.outerEndVertexId);
@@ -780,7 +956,7 @@ export function deriveStairTreads(boundary, stair) {
 }
 
 export function deriveStairSideSegments(boundary, stair, side, candidateBoundaries = [boundary]) {
-  const byId = new Map(boundary.vertices.map((vertex) => [vertex.id, vertex]));
+  const byId = getStairVertexMap(boundary, stair);
   const start = byId.get(side === 'start' ? stair.anchors.openingStartVertexId : stair.anchors.openingEndVertexId);
   const end = byId.get(side === 'start' ? stair.anchors.outerStartVertexId : stair.anchors.outerEndVertexId);
   if (!start || !end) return [];

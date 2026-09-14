@@ -1,5 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import { EDGE_PROPERTY_SCHEMA_VERSION } from '../src/core/construction-objects/edge-properties.js';
 import { clearEdgeOrientationConstraint, constrainEdge, createDeckBoundary, getEdgeOrientationConstraint, isEdgeLocked, moveVertexWithConstraints, offsetEdge, setEdgeLength, setEdgeLocked, setEdgeOrientationConstraint, splitEdgeIntoSegments, updateEdgeProperties, validateDeckBoundary } from '../src/tools/deck-boundary/deck-boundary.js';
 
 let counter = 0;
@@ -10,10 +11,11 @@ test('every boundary edge is a typed construction entity', () => {
   const boundary = makeBoundary();
   boundary.edges.forEach((edge) => {
     assert.equal(edge.type, 'boundary-edge');
-    assert.equal(edge.schemaVersion, 1);
+    assert.equal(edge.schemaVersion, EDGE_PROPERTY_SCHEMA_VERSION);
     assert.ok(edge.properties.classification);
     assert.ok(edge.properties.finishes);
     assert.ok(edge.properties.attachments);
+    assert.equal(edge.properties.attachments.rimJoist, null);
   });
 });
 
