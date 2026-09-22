@@ -8,6 +8,8 @@ export function createProjectDocument(options = {}) {
     schemaVersion: PROJECT_SCHEMA_VERSION,
     id: options.id ?? crypto.randomUUID(),
     name: options.name ?? 'Untitled deck',
+    // Sequential DCR project number (CME-000123). Assigned on first OneDrive save.
+    projectNumber: options.projectNumber ?? null,
     units: 'imperial',
     workflow: {
       stage: 'field-capture',

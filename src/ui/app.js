@@ -3,6 +3,8 @@ import { activateLibraryProject, createProjectLibrary, getActiveProject, parsePr
 import { createSalesHubStepOneMessage, createSalesHubStepOnePayload, parseSalesHubLaunchContext } from '../core/integrations/dcr-sales-hub.js';
 import { assessReference, createReferenceProjectExport, referenceDefaults } from '../tools/reference-project/reference-project.js';
 import { renderReferenceAssessment, renderReferenceProjectDialog } from '../tools/reference-project/reference-project-controls.js';
+import { createOneDriveService } from '../core/storage/onedrive-service.js';
+import { renderOneDrivePanel, renderOneDriveProjectList } from '../tools/onedrive/onedrive-controls.js';
 import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
 import { getBoundaryLevelDown, getDeckBoundaries, getProjectSurfaceArea, setBoundaryLevelDown, translateDeckAssembly } from '../core/construction-objects/multi-deck-project.js';
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
@@ -117,6 +119,12 @@ let catAudioRecorder = null;
 let catAudioChunks = [];
 let takeoffOpen = false;
 let referenceDraft = null;
+let oneDriveState = null;
+let oneDriveProjects = [];
+let oneDriveListing = false;
+// Re-render whenever the sync status changes so the status line stays honest.
+const oneDrive = createOneDriveService({ onChange: (state) => { oneDriveState = state; if (projectMenuOpen) render(); } });
+oneDriveState = oneDrive.state();
 let takeoffExpanded = new Set(['decking', 'railing']);
 let takeoffAddCategory = null;
 let takeoffViewMode = 'detailed';
@@ -244,6 +252,8 @@ function persist() {
   projectLibrary = upsertLibraryProject(projectLibrary, documentModel);
   localStorage.setItem(PROJECT_LIBRARY_STORAGE_KEY, serializeProjectLibrary(projectLibrary));
   localStorage.setItem(STORAGE_KEY, serializeProject(documentModel));
+  // The device copy is already safe; OneDrive follows on a debounce.
+  oneDrive.scheduleSave(documentModel);
 }
 
 function svgElement(tag, attributes = {}) {
@@ -332,7 +342,7 @@ function renderProjectMenu() {
     const area = getProjectSurfaceArea(project);
     return `<article class="project-list-item ${active ? 'active' : ''}"><button class="project-open" data-action="open-project" data-project-id="${escapeHtml(project.id)}"><span><strong>${escapeHtml(project.name)}</strong><small>${formatSquareFeet(area)} · ${new Date(project.updatedAt).toLocaleDateString()}</small></span>${active ? '<b>OPEN</b>' : '<b>Open</b>'}</button>${confirming ? `<div class="project-delete-confirm"><span>Delete this local project?</span><button class="button danger" data-action="confirm-delete-project" data-project-id="${escapeHtml(project.id)}">Delete</button><button class="button ghost" data-action="cancel-delete-project">Cancel</button></div>` : `<button class="project-delete" data-action="request-delete-project" data-project-id="${escapeHtml(project.id)}" aria-label="Delete ${escapeHtml(project.name)}">×</button>`}</article>`;
   }).join('');
-  return `<section class="project-menu" role="dialog" aria-label="Project options"><div class="project-menu-heading"><div><div class="eyebrow">Current project</div><strong>Project options</strong></div><button class="menu-close" data-action="close-project-menu" aria-label="Close project options">×</button></div><label class="project-name-editor"><span>Project name</span><div><input id="project-name-input" value="${escapeHtml(documentModel.name)}" maxlength="80"><button class="button" data-action="rename-project">Save</button></div></label><button class="button primary new-project-button" data-action="new-project">+ New project</button><div class="project-list-heading"><span>Projects on this device</span><small>${projects.length}</small></div><div class="project-list">${rows}</div><p class="project-storage-note">Projects autosave independently. Future SharePoint or OneDrive sync can replace this local library without changing the project format.</p></section>`;
+  return `<section class="project-menu" role="dialog" aria-label="Project options"><div class="project-menu-heading"><div><div class="eyebrow">Current project</div><strong>Project options</strong></div><button class="menu-close" data-action="close-project-menu" aria-label="Close project options">×</button></div><label class="project-name-editor"><span>Project name</span><div><input id="project-name-input" value="${escapeHtml(documentModel.name)}" maxlength="80"><button class="button" data-action="rename-project">Save</button></div></label><button class="button primary new-project-button" data-action="new-project">+ New project</button><div class="project-list-heading"><span>Projects on this device</span><small>${projects.length}</small></div><div class="project-list">${rows}</div><div class="project-list-heading"><span>DCR OneDrive</span></div>${renderOneDrivePanel(oneDriveState, oneDrive.describeLocation(documentModel))}${oneDriveListing || oneDriveProjects.length ? renderOneDriveProjectList(oneDriveProjects, oneDriveListing) : ''}<p class="project-storage-note">Projects autosave on this device immediately and sync to OneDrive under CME/Projects when connected.</p></section>`;
 }
 
 function renderExportMenu() {
@@ -3778,7 +3788,8 @@ function handleAction(action, source = null) {
     commit(next, 'Save reference project details');
     return;
   }
-  if (action === 'close-project-menu') { projectMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
+  if (action === 'close-project-menu') { projectMenuOpen = false; pendingProjectDeleteId = null; oneDriveProjects = []; render(); return; }
+  if (action.startsWith('onedrive-')) { handleOneDriveAction(action, source); return; }
   if (action === 'toggle-export-menu') { exportMenuOpen = !exportMenuOpen; projectMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
   if (action === 'open-takeoff') { takeoffOpen = true; exportMenuOpen = false; projectMenuOpen = false; takeoffAddCategory = null; message = 'Editable project takeoff generated'; render(); return; }
   if (action === 'close-takeoff') { takeoffOpen = false; takeoffAddCategory = null; message = 'Takeoff saved with this project'; render(); return; }
@@ -4395,7 +4406,12 @@ function stepOnePayload() {
   });
 }
 
+// Export destinations in OneDrive, keyed by the download suffix each export uses.
+const ONEDRIVE_EXPORT_KINDS = { 'step-1': 'sales-hub', 'reference-project': 'sales-hub', 'takeoff-detailed': 'takeoff', 'takeoff-consolidated': 'takeoff' };
+
 function downloadJson(payload, suffix) {
+  const kind = ONEDRIVE_EXPORT_KINDS[suffix];
+  if (kind) mirrorExportToOneDrive(kind, { content: JSON.stringify(payload, null, 2), extension: 'json', contentType: 'application/json', prefix: suffix });
   const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const anchor = document.createElement('a');
@@ -4403,6 +4419,93 @@ function downloadJson(payload, suffix) {
   anchor.download = `${documentModel.name.toLowerCase().replace(/[^a-z0-9]+/g, '-')}-${suffix}.json`;
   anchor.click();
   URL.revokeObjectURL(url);
+}
+
+async function handleOneDriveAction(action, source) {
+  if (action === 'onedrive-connect') {
+    message = 'Connecting to OneDrive…';
+    render();
+    const state = await oneDrive.connect();
+    message = state.connected ? `OneDrive connected · ${state.accountName ?? 'signed in'}` : state.detail || 'OneDrive connection failed';
+    if (state.connected) await oneDrive.saveNow(documentModel);
+    render();
+    return;
+  }
+  if (action === 'onedrive-disconnect') {
+    await oneDrive.disconnect();
+    oneDriveProjects = [];
+    message = 'OneDrive signed out · projects remain on this device';
+    render();
+    return;
+  }
+  if (action === 'onedrive-save-now') {
+    const result = await oneDrive.saveNow(documentModel);
+    if (result?.status === 'saved') {
+      // The save assigns the project number on first write; keep it locally.
+      documentModel = { ...documentModel, projectNumber: result.document.projectNumber };
+      persist();
+      message = `Saved to OneDrive · ${result.paths.folder}`;
+    } else if (result?.status !== 'conflict') message = oneDrive.state().detail || 'OneDrive save failed';
+    render();
+    return;
+  }
+  if (action === 'onedrive-open') {
+    oneDriveListing = true;
+    render();
+    oneDriveProjects = await oneDrive.listProjects();
+    oneDriveListing = false;
+    message = `${oneDriveProjects.length} project${oneDriveProjects.length === 1 ? '' : 's'} in OneDrive`;
+    render();
+    return;
+  }
+  if (action === 'onedrive-open-project') {
+    const folder = source?.dataset?.folder;
+    if (!folder) return;
+    const remote = await oneDrive.openProject(folder);
+    if (!remote) { message = 'That OneDrive project could not be read'; render(); return; }
+    documentModel = synchronizeHostedStairs(consolidateJoistRuns(remote));
+    projectLibrary = upsertLibraryProject(projectLibrary, documentModel);
+    history = new CommandStack();
+    selected = { kind: null, id: null };
+    projectMenuOpen = false;
+    oneDriveProjects = [];
+    persist();
+    fitProject();
+    message = `Opened ${documentModel.name} from OneDrive`;
+    render();
+    return;
+  }
+  if (action === 'onedrive-keep-local') {
+    const result = await oneDrive.keepLocal();
+    message = result ? 'This device’s copy is now the OneDrive copy' : oneDrive.state().detail || 'OneDrive save failed';
+    render();
+    return;
+  }
+  if (action === 'onedrive-take-remote') {
+    const remote = oneDrive.takeRemote();
+    if (!remote) return;
+    documentModel = synchronizeHostedStairs(consolidateJoistRuns(parseProject(JSON.stringify(remote))));
+    projectLibrary = upsertLibraryProject(projectLibrary, documentModel);
+    history = new CommandStack();
+    selected = { kind: null, id: null };
+    persist();
+    fitProject();
+    message = 'Replaced this device’s copy with the OneDrive copy';
+    render();
+  }
+}
+
+/**
+ * Files a copy of an export in its OneDrive folder. Never blocks or replaces
+ * the local download: an offline estimator still gets the file.
+ */
+function mirrorExportToOneDrive(kind, { content, extension, contentType, prefix }) {
+  if (!oneDrive.state().connected) return;
+  oneDrive.saveExport(documentModel, kind, { content, extension, contentType, prefix }).then((result) => {
+    if (!result) return;
+    message = `${message} · filed in ${result.path.replace(/^CME\/Projects\/[^/]+\//, '')}`;
+    render();
+  });
 }
 
 function readReferenceForm() {
@@ -4424,6 +4527,8 @@ function saveToStepOne() {
   if (salesHubLaunch.connected && target) {
     target.postMessage(createSalesHubStepOneMessage(payload), salesHubLaunch.targetOrigin);
     message = 'Decking, railing, stairs, and sketch reference sent to Step 1';
+    // Keep the OneDrive record even when the payload went straight to Sales Hub.
+    mirrorExportToOneDrive('sales-hub', { content: JSON.stringify(payload, null, 2), extension: 'json', contentType: 'application/json', prefix: 'step-1' });
   } else {
     downloadJson(payload, 'step-1');
     message = 'Step 1 JSON downloaded · direct Sales Hub connection is ready for a future launch context';
@@ -4444,8 +4549,26 @@ function exportProjectPdf() {
   projectMenuOpen = false;
   fitProject();
   message = 'PDF layout ready';
-  window.setTimeout(() => window.print(), 80);
+  window.setTimeout(() => {
+    // The PDF itself is produced by the browser's print dialog and cannot be
+    // captured here, so the sketch is filed under Plans as a vector SVG.
+    fileSketchPlan();
+    window.print();
+  }, 80);
   render();
+}
+
+/** Files the current sketch under Exports/Plans as a standalone SVG. */
+function fileSketchPlan() {
+  const canvas = app.querySelector('svg.model-canvas');
+  if (!canvas || !oneDrive.state().connected) return;
+  const clone = canvas.cloneNode(true);
+  clone.setAttribute('xmlns', SVG_NS);
+  clone.removeAttribute('class');
+  mirrorExportToOneDrive('plan', {
+    content: `<?xml version="1.0" encoding="UTF-8"?>\n${clone.outerHTML}`,
+    extension: 'svg', contentType: 'image/svg+xml', prefix: 'sketch-plan',
+  });
 }
 
 function printTakeoff(includePrices) {
@@ -4818,4 +4941,14 @@ function updateHudFromKeyboard() {
   input.classList.toggle('active', Boolean(numericBuffer));
 }
 
+// A pending autosave must not be lost when the tab closes mid-visit.
+window.addEventListener('pagehide', () => { oneDrive.flush(); });
+
 render();
+
+// Restore an existing OneDrive session without prompting the estimator.
+oneDrive.resume().then((state) => {
+  if (!state.connected) return;
+  message = `OneDrive connected · ${state.accountName ?? 'signed in'}`;
+  render();
+});

@@ -18,7 +18,16 @@ Do **not** use `CME-Instructions-for-Claude.pdf` as the source of truth. The PDF
 
 Do not infer requirements from conversation history, and do not reset or replace this working folder before reviewing uncommitted work.
 
-## Most recent local changes — 2026-09-01
+## Most recent local changes — 2026-09-22
+
+- Projects sync to the DCR OneDrive account under `CME/Projects/CME-000123 — Name/`, with `Exports/{Plans,Takeoffs,DCR Sales Hub}/`, `Attachments/{Photos,Audio}/`, and `CME/Templates/{Materials,Assemblies}/`.
+- Storage lives behind an adapter boundary in `src/core/storage/` (paths, Graph client, sync, auth, service), each module injectable and tested with no network.
+- Device storage stays authoritative; OneDrive follows on a debounce. Conditional writes surface concurrent edits instead of overwriting them.
+- Inert until an Entra application (client) ID is set in `src/core/storage/onedrive-config.js` — see `docs/integrations/OneDrive-Setup.md`.
+
+Detail: `changelog/2026-09-22-onedrive-project-storage.md`.
+
+## Earlier local changes — 2026-09-01
 
 - CAT construction lines can become circular arcs.
 - CAT Offset supports live/typed distance, Repeat Offset, adjacent joined offsets, and concentric arc offsets.

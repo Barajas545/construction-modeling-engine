@@ -586,3 +586,30 @@ button { color: inherit; }
   body.print-takeoff.takeoff-no-prices .takeoff-price, body.print-takeoff.takeoff-no-prices .takeoff-subtotal { display: none !important; }
   body.print-takeoff.takeoff-no-prices .takeoff-line { grid-template-columns: minmax(300px, 1fr) 90px; }
 }
+
+/* OneDrive sync panel inside the project options menu */
+.onedrive-panel { margin: 8px 0 4px; border: 1px solid #39454d; border-radius: 10px; background: rgb(22 28 33 / 85%); padding: 10px 12px; }
+.onedrive-heading { display: flex; align-items: flex-start; gap: 9px; }
+.onedrive-heading div { flex: 1; min-width: 0; }
+.onedrive-heading strong { display: block; font-size: 12px; }
+.onedrive-heading small { display: block; margin-top: 2px; overflow: hidden; color: #8b9aa4; font-size: 9px; line-height: 1.4; text-overflow: ellipsis; white-space: nowrap; }
+.onedrive-dot { flex: none; width: 8px; height: 8px; margin-top: 4px; border-radius: 50%; background: #6b7a84; }
+.onedrive-dot.good { background: #7fd455; }
+.onedrive-dot.busy { background: #e0b73c; animation: onedrive-pulse 1.1s ease-in-out infinite; }
+.onedrive-dot.warn { background: #e2703c; }
+@keyframes onedrive-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .onedrive-dot.busy { animation: none; } }
+.onedrive-number { flex: none; border-radius: 4px; background: #2b343b; padding: 2px 5px; color: #9fb0ba; font-size: 9px; letter-spacing: .04em; }
+.onedrive-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.onedrive-actions .button { flex: 1 1 auto; font-size: 10px; }
+.onedrive-setup { margin: 8px 0 0; color: #8b9aa4; font-size: 9px; line-height: 1.5; }
+.onedrive-setup code { border-radius: 3px; background: #2b343b; padding: 1px 4px; }
+.onedrive-conflict { margin-top: 10px; border: 1px solid #7a4526; border-radius: 8px; background: rgb(56 32 18 / 60%); padding: 9px 10px; }
+.onedrive-conflict strong { display: block; font-size: 11px; }
+.onedrive-conflict p { margin: 4px 0 0; color: #c3a893; font-size: 9px; line-height: 1.45; }
+.onedrive-remote-list { margin-top: 8px; }
+.onedrive-remote-list p { margin: 6px 2px; color: #8b9aa4; font-size: 10px; }
+.onedrive-remote-row { display: flex; align-items: center; gap: 8px; width: 100%; margin-top: 4px; border: 1px solid #39454d; border-radius: 8px; background: rgb(22 28 33 / 70%); padding: 7px 9px; text-align: left; cursor: pointer; }
+.onedrive-remote-row:hover { border-color: #5a6b76; background: rgb(32 40 46 / 90%); }
+.onedrive-remote-row code { flex: none; color: #9fb0ba; font-size: 9px; }
+.onedrive-remote-row span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
