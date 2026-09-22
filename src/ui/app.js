@@ -1,6 +1,8 @@
 import { createProjectDocument, parseProject, serializeProject, setProjectWorkflowStage, upsertObject } from '../core/document/project-document.js';
 import { activateLibraryProject, createProjectLibrary, getActiveProject, parseProjectLibrary, removeLibraryProject, serializeProjectLibrary, upsertLibraryProject } from '../core/document/project-library.js';
 import { createSalesHubStepOneMessage, createSalesHubStepOnePayload, parseSalesHubLaunchContext } from '../core/integrations/dcr-sales-hub.js';
+import { assessReference, createReferenceProjectExport, referenceDefaults } from '../tools/reference-project/reference-project.js';
+import { renderReferenceAssessment, renderReferenceProjectDialog } from '../tools/reference-project/reference-project-controls.js';
 import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
 import { getBoundaryLevelDown, getDeckBoundaries, getProjectSurfaceArea, setBoundaryLevelDown, translateDeckAssembly } from '../core/construction-objects/multi-deck-project.js';
 import { normalizeBoundaryEdge } from '../core/construction-objects/edge-properties.js';
@@ -114,6 +116,7 @@ let lastCatOffsetDistance = null;
 let catAudioRecorder = null;
 let catAudioChunks = [];
 let takeoffOpen = false;
+let referenceDraft = null;
 let takeoffExpanded = new Set(['decking', 'railing']);
 let takeoffAddCategory = null;
 let takeoffViewMode = 'detailed';
@@ -277,6 +280,7 @@ function render() {
         <div class="top-actions"><button class="button primary save-step-one" data-action="save-step-one">Save to Step 1</button><div class="export-control"><button class="button ghost export-toggle ${exportMenuOpen ? 'active-constraint' : ''}" data-action="toggle-export-menu" aria-expanded="${exportMenuOpen}"><span class="export-long">Export options</span><span class="export-short">Export</span> ⌄</button>${renderExportMenu()}</div></div>
       </header>
       ${renderTakeoffWorkspace()}
+      ${referenceDraft ? renderReferenceProjectDialog(referenceDraft, stepOnePayload().quantities, assessReference(documentModel, referenceDraft, stepOnePayload().quantities)) : ''}
       <section class="workspace-shell">
         <nav class="toolrail" aria-label="Modeling tools">
           <button class="tool-button ${mode === 'select' ? 'active' : ''}" data-mode="select" title="Select and edit"><span class="tool-icon">↖</span><span class="tool-label">Select</span></button>
@@ -333,7 +337,7 @@ function renderProjectMenu() {
 
 function renderExportMenu() {
   if (!exportMenuOpen) return '';
-  return `<section class="export-menu" role="menu"><button data-action="open-takeoff"><span><strong>Takeoff</strong><small>Editable materials, pricing, and supplier quote</small></span><b>NEW</b></button><button data-action="export-pdf"><span><strong>Export PDF</strong><small>Professional visual sketch and field quantities</small></span><b>PDF</b></button><button data-action="download-step-one-json"><span><strong>Download Step 1 JSON</strong><small>Portable fallback for DCR Sales Hub</small></span><b>JSON</b></button></section>`;
+  return `<section class="export-menu" role="menu"><button data-action="open-takeoff"><span><strong>Takeoff</strong><small>Editable materials, pricing, and supplier quote</small></span><b>NEW</b></button><button data-action="export-pdf"><span><strong>Export PDF</strong><small>Professional visual sketch and field quantities</small></span><b>PDF</b></button><button data-action="download-step-one-json"><span><strong>Download Step 1 JSON</strong><small>Portable fallback for DCR Sales Hub</small></span><b>JSON</b></button><button data-action="open-reference"><span><strong>Export as reference project</strong><small>Design reference or completed DCR project</small></span><b>JSON</b></button></section>`;
 }
 
 function takeoffContext() {
@@ -1623,6 +1627,29 @@ function renderNodeInferenceGuide(svg, inference, snappedPoint, markerSize) {
 }
 
 function bindEvents() {
+  const referenceForm = app.querySelector('#reference-form');
+  if (referenceForm) {
+    const dialog = referenceForm.closest('dialog');
+    dialog.showModal();
+    dialog.addEventListener('cancel', (event) => { event.preventDefault(); closeReference(); });
+    referenceForm.addEventListener('input', () => {
+      readReferenceForm();
+      app.querySelector('#reference-assessment').innerHTML = renderReferenceAssessment(assessReference(documentModel, referenceDraft, stepOnePayload().quantities));
+    });
+    referenceForm.elements.kind.addEventListener('change', () => { readReferenceForm(); render(); });
+    referenceForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      readReferenceForm();
+      try {
+        const payload = createReferenceProjectExport(documentModel, { metadata: referenceDraft, takeoffContext: takeoffContext() });
+        documentModel = { ...documentModel, referenceProject: { ...referenceDraft }, updatedAt: new Date().toISOString() };
+        persist();
+        downloadJson(payload, 'reference-project');
+        message = 'Reference project JSON downloaded · DCR import adapter required';
+        closeReference();
+      } catch (error) { app.querySelector('#reference-assessment').textContent = error.message; }
+    });
+  }
   const stairCoveringSelect = app.querySelector('#stair-covering-style');
   if (stairCoveringSelect) stairCoveringSelect.addEventListener('change', () => {
     const stair = selectedStairObject();
@@ -3741,6 +3768,16 @@ function handleAction(action, source = null) {
     return;
   }
   if (action === 'toggle-project-menu') { projectMenuOpen = !projectMenuOpen; exportMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
+  if (action === 'open-reference') { referenceDraft = referenceDefaults(documentModel); exportMenuOpen = false; projectMenuOpen = false; render(); return; }
+  if (action === 'close-reference') { closeReference(); return; }
+  if (action === 'save-reference-details') {
+    readReferenceForm();
+    const next = { ...documentModel, referenceProject: { ...referenceDraft }, updatedAt: new Date().toISOString() };
+    referenceDraft = null;
+    message = 'Reference details saved with this project';
+    commit(next, 'Save reference project details');
+    return;
+  }
   if (action === 'close-project-menu') { projectMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
   if (action === 'toggle-export-menu') { exportMenuOpen = !exportMenuOpen; projectMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
   if (action === 'open-takeoff') { takeoffOpen = true; exportMenuOpen = false; projectMenuOpen = false; takeoffAddCategory = null; message = 'Editable project takeoff generated'; render(); return; }
@@ -4368,6 +4405,19 @@ function downloadJson(payload, suffix) {
   URL.revokeObjectURL(url);
 }
 
+function readReferenceForm() {
+  const form = app.querySelector('#reference-form');
+  if (!form || !referenceDraft) return;
+  referenceDraft = { ...referenceDraft, ...Object.fromEntries(new FormData(form)) };
+  referenceDraft.confirmed = form.elements.confirmed?.checked === true;
+}
+
+function closeReference() {
+  referenceDraft = null;
+  render();
+  app.querySelector('[data-action="toggle-export-menu"]')?.focus();
+}
+
 function saveToStepOne() {
   const payload = stepOnePayload();
   const target = window.opener ?? (window.parent !== window ? window.parent : null);
@@ -4587,6 +4637,7 @@ function repeatLastCatSegment() {
 }
 
 window.addEventListener('keydown', (event) => {
+  if (referenceDraft) return;
   if (event.key === 'Escape' && archMode) {
     event.preventDefault(); archMode = null; archGesture = null; archDraft = null;
     message = 'Arch line canceled'; render(); return;

@@ -533,6 +533,22 @@ button { color: inherit; }
   .utility-popover.visibility { --connector-bottom: 169px; }
 }
 
+.reference-dialog { width: min(840px, calc(100vw - 32px)); max-height: 90vh; box-sizing: border-box; padding: 24px; border: 1px solid #42545b; border-radius: 16px; background: #10191e; color: #edf5f7; overflow: auto; }
+.reference-dialog::backdrop { background: rgb(0 0 0 / 65%); }
+.reference-dialog header, .reference-dialog footer { display: flex; justify-content: space-between; align-items: center; gap: 16px; }
+.reference-dialog h1 { font-size: 24px; margin: 8px 0; }
+.reference-dialog h2 { font-size: 18px; margin-top: 24px; }
+.reference-dialog p { color: #a4bac4; line-height: 1.5; font-size: 14px; }
+.reference-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin: 20px 0; }
+.reference-dialog label { display: grid; gap: 7px; font-size: 14px; }
+.reference-dialog input, .reference-dialog select, .reference-dialog textarea { width: 100%; box-sizing: border-box; min-width: 0; padding: 10px; color: #edf5f7; background: #0a1115; border: 1px solid #42545b; border-radius: 8px; font: inherit; }
+.reference-dialog .reference-confirm { display: flex; align-items: flex-start; margin: 16px 0; line-height: 1.5; }
+.reference-confirm input { width: 18px; margin-top: 4px; flex: none; }
+.reference-metrics, #reference-assessment { padding: 14px; border-radius: 10px; background: #1b292e; line-height: 1.6; }
+#reference-assessment { margin: 16px 0; font-size: 14px; }
+#reference-assessment ul { margin: 8px 0 0; padding-left: 22px; }
+@media (max-width: 600px) { .reference-grid { grid-template-columns: 1fr; } .reference-dialog { padding: 16px; } .reference-dialog footer { flex-wrap: wrap; } }
+
 @media print {
   @page { size: landscape; margin: .35in; }
   :root { color-scheme: light; }
