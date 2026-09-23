@@ -3,6 +3,8 @@ import { activateLibraryProject, createProjectLibrary, getActiveProject, parsePr
 import { createSalesHubStepOneMessage, createSalesHubStepOnePayload, parseSalesHubLaunchContext } from '../core/integrations/dcr-sales-hub.js';
 import { assessReference, createReferenceProjectExport, referenceDefaults } from '../tools/reference-project/reference-project.js';
 import { renderReferenceAssessment, renderReferenceProjectDialog } from '../tools/reference-project/reference-project-controls.js';
+import { createPyramidStair, solvePyramidStair, TREAD_DEPTH_PRESETS } from '../tools/pyramid-stair/pyramid-stair.js';
+import { renderPyramidStairDialog, renderPyramidSummary } from '../tools/pyramid-stair/pyramid-stair-controls.js';
 import { createOneDriveService } from '../core/storage/onedrive-service.js';
 import { renderOneDrivePanel, renderOneDriveProjectList } from '../tools/onedrive/onedrive-controls.js';
 import { deriveModelProgress } from '../core/construction-objects/progressive-model.js';
@@ -119,6 +121,7 @@ let catAudioRecorder = null;
 let catAudioChunks = [];
 let takeoffOpen = false;
 let referenceDraft = null;
+let pyramidDraft = null;
 let oneDriveState = null;
 let oneDriveProjects = [];
 let oneDriveListing = false;
@@ -303,6 +306,7 @@ function render() {
       </header>
       ${renderTakeoffWorkspace()}
       ${referenceDraft ? renderReferenceProjectDialog(referenceDraft, stepOnePayload().quantities, assessReference(documentModel, referenceDraft, stepOnePayload().quantities)) : ''}
+      ${pyramidDraft ? renderPyramidStairDialog(pyramidDraft, pyramidEdgeRows(), pyramidSolution()) : ''}
       <section class="workspace-shell">
         <nav class="toolrail" aria-label="Modeling tools">
           <button class="tool-button ${mode === 'select' ? 'active' : ''}" data-mode="select" title="Select and edit"><span class="tool-icon">↖</span><span class="tool-label">Select</span></button>
@@ -542,7 +546,7 @@ function renderContextPanel(current) {
       const assemblyLocked = localBoundary.vertices.some((vertex) => vertex.locked) || localBoundary.edges.some((edge) => edge.properties?.custom?.locked);
       const deleting = pendingDeckDeleteId === localBoundary.id;
       const boardingActive = boardingDirectionMode?.boundaryId === localBoundary.id;
-      return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(localBoundary.computed.areaSquareInches)}${levelDown > 0 ? ` · ↓ ${formatInches(levelDown)}` : ''}</h2></div>${close}</div><label class="context-select"><span>Down level · local deck</span><div class="compound-field"><input id="boundary-level-down" value="${formatInches(levelDown)}"><button class="button" data-action="apply-boundary-level">Apply</button></div></label><div class="context-actions"><button class="button primary ${moveBoundaryMode?.boundaryId === localBoundary.id ? 'active-constraint' : ''}" data-action="move-deck-area" ${assemblyLocked ? 'disabled' : ''}>Move deck area</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button" data-action="start-level-down">Add level down</button></div><div class="context-actions context-actions-3"><button class="button ${boardingActive ? 'active-constraint' : ''}" data-action="set-board-direction">${boardingActive ? '✓ Select line / curve' : boarding ? 'Change direction' : 'Board direction'}</button><button class="button" data-action="rotate-board-direction" ${boarding && boarding.pattern !== 'curved' ? '' : 'disabled'}>Rotate 90°</button><button class="button" data-action="clear-board-direction" ${boarding ? '' : 'disabled'}>Clear boards</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div><div class="context-actions"><button class="button" data-action="hide-selected-boundary" ${isDeckBoundaryVisible(localBoundary) ? '' : 'disabled'}>${isDeckBoundaryVisible(localBoundary) ? 'Hide this boundary' : 'Boundary hidden'}</button><button class="button" data-action="show-all-boundaries">Show all boundaries</button></div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="reset-dimension-position">Reset area position</button></div>${deleting ? '<div class="delete-confirmation"><strong>Delete this complete deck area?</strong><span>Attached stairs, railings, Level Down objects, and local dimensions will also be removed.</span><div class="context-actions"><button class="button danger" data-action="confirm-delete-deck">Confirm delete</button><button class="button" data-action="cancel-delete-deck">Cancel</button></div></div>' : '<button class="button danger context-full" data-action="request-delete-deck">Delete deck area</button>'}<div class="context-note">${assemblyLocked ? 'Unlock local nodes and edges before moving this deck.' : boarding ? boarding.pattern === 'curved' ? `Curved boarding follows concentric rows with a ${formatInches(boarding.boardWidth)} board and ${formatInches(boarding.gap)} gap.` : `Boarding follows a ${formatInches(boarding.boardWidth)} board with a ${formatInches(boarding.gap)} gap.` : 'Select Board direction, then touch any straight construction line or curved Deck Boundary edge.'}</div></section>`;
+      return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected deck area</div><h2>${formatSquareFeet(localBoundary.computed.areaSquareInches)}${levelDown > 0 ? ` · ↓ ${formatInches(levelDown)}` : ''}</h2></div>${close}</div><label class="context-select"><span>Down level · local deck</span><div class="compound-field"><input id="boundary-level-down" value="${formatInches(levelDown)}"><button class="button" data-action="apply-boundary-level">Apply</button></div></label><div class="context-actions"><button class="button primary ${moveBoundaryMode?.boundaryId === localBoundary.id ? 'active-constraint' : ''}" data-action="move-deck-area" ${assemblyLocked ? 'disabled' : ''}>Move deck area</button><button class="button" data-action="toggle-decking">${deckingVisible ? 'Hide all decking' : 'Show all decking'}</button></div><div class="context-actions"><button class="button" data-action="make-boundary-90">Make 90° corners</button><button class="button" data-action="start-level-down">Add level down</button><button class="button" data-action="open-pyramid">Convert to pyramid steps</button></div><div class="context-actions context-actions-3"><button class="button ${boardingActive ? 'active-constraint' : ''}" data-action="set-board-direction">${boardingActive ? '✓ Select line / curve' : boarding ? 'Change direction' : 'Board direction'}</button><button class="button" data-action="rotate-board-direction" ${boarding && boarding.pattern !== 'curved' ? '' : 'disabled'}>Rotate 90°</button><button class="button" data-action="clear-board-direction" ${boarding ? '' : 'disabled'}>Clear boards</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div><div class="context-actions"><button class="button" data-action="hide-selected-boundary" ${isDeckBoundaryVisible(localBoundary) ? '' : 'disabled'}>${isDeckBoundaryVisible(localBoundary) ? 'Hide this boundary' : 'Boundary hidden'}</button><button class="button" data-action="show-all-boundaries">Show all boundaries</button></div><div class="context-actions"><button class="button danger" data-action="toggle-selected-dimension">Delete dimension</button><button class="button" data-action="reset-dimension-position">Reset area position</button></div>${deleting ? '<div class="delete-confirmation"><strong>Delete this complete deck area?</strong><span>Attached stairs, railings, Level Down objects, and local dimensions will also be removed.</span><div class="context-actions"><button class="button danger" data-action="confirm-delete-deck">Confirm delete</button><button class="button" data-action="cancel-delete-deck">Cancel</button></div></div>' : '<button class="button danger context-full" data-action="request-delete-deck">Delete deck area</button>'}<div class="context-note">${assemblyLocked ? 'Unlock local nodes and edges before moving this deck.' : boarding ? boarding.pattern === 'curved' ? `Curved boarding follows concentric rows with a ${formatInches(boarding.boardWidth)} board and ${formatInches(boarding.gap)} gap.` : `Boarding follows a ${formatInches(boarding.boardWidth)} board with a ${formatInches(boarding.gap)} gap.` : 'Select Board direction, then touch any straight construction line or curved Deck Boundary edge.'}</div></section>`;
     }
     if (reference?.kind === 'level-down-area') return renderLevelDownContext(reference.levelDown, reference.region, deckingVisible, close, true);
     return `<section class="context-object-panel"><div class="context-heading"><div><div class="eyebrow">Selected annotation</div><h2>Dimension</h2></div>${close}</div><div class="context-actions"><button class="button primary" data-action="edit-dimension">Edit object</button><button class="button" data-action="reset-dimension-position">Reset position</button></div><div class="context-actions"><button class="button ${dimensionLeaderMode?.referenceId === selected.id ? 'active-constraint' : ''}" data-action="reposition-dimension-arrow">Reposition arrow</button><button class="button" data-action="reset-dimension-arrow">Reset arrow</button></div><button class="button danger context-full" data-action="toggle-selected-dimension">Delete dimension</button></section>`;
@@ -947,6 +951,7 @@ function drawCanvas(svg, current, validation) {
       renderStairGraphics(svg, visibleBoundary);
     });
     renderStairPreview(svg, current);
+    renderPyramidGraphics(svg);
     renderRailingGraphics(svg);
     if (getDimensionLayer(documentModel).visible) {
       boundaries().forEach((deck) => {
@@ -1164,6 +1169,26 @@ function renderCatMeasurementLabel(svg, point, label, referenceId, className) {
   text.textContent = label;
   group.append(text);
   svg.append(group);
+}
+
+/**
+ * Draws the stacked boxes largest-first, so each smaller ring paints over the one
+ * below and the plan reads as a pyramid rather than a pile of outlines.
+ */
+function renderPyramidGraphics(svg) {
+  const pyramids = documentModel.objects.filter((object) => object.type === 'pyramid-stair');
+  for (const pyramid of pyramids) {
+    const rings = [...(pyramid.geometry?.rings ?? [])].sort((a, b) => b.index - a.index);
+    for (const ring of rings) {
+      const points = ring.vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ');
+      svg.append(svgElement('polygon', { points, class: 'pyramid-ring', 'data-pyramid-id': pyramid.id }));
+    }
+    // One nosing line per box edge keeps the step edges legible once the fills stack.
+    for (const ring of rings) {
+      const points = ring.vertices.map((vertex) => `${vertex.x},${vertex.y}`).join(' ');
+      svg.append(svgElement('polygon', { points, class: 'pyramid-ring-edge', 'data-pyramid-id': pyramid.id }));
+    }
+  }
 }
 
 function renderStairGraphics(svg, current) {
@@ -1670,6 +1695,35 @@ function bindEvents() {
         message = 'Reference project JSON downloaded · DCR import adapter required';
         closeReference();
       } catch (error) { app.querySelector('#reference-assessment').textContent = error.message; }
+    });
+  }
+  const pyramidForm = app.querySelector('#pyramid-form');
+  if (pyramidForm) {
+    const dialog = pyramidForm.closest('dialog');
+    dialog.showModal();
+    dialog.addEventListener('cancel', (event) => { event.preventDefault(); closePyramid(); });
+    // Only the summary is re-rendered on input, so typing never loses focus mid-number.
+    pyramidForm.addEventListener('input', () => {
+      readPyramidForm();
+      const solution = pyramidSolution();
+      app.querySelector('#pyramid-summary').innerHTML = renderPyramidSummary(solution);
+      pyramidForm.querySelector('button[type="submit"]').disabled = !solution.ok;
+    });
+    pyramidForm.addEventListener('submit', (event) => {
+      event.preventDefault();
+      readPyramidForm();
+      const localBoundary = pyramidBoundary();
+      const solution = pyramidSolution();
+      if (!solution.ok) { app.querySelector('#pyramid-summary').innerHTML = renderPyramidSummary(solution); return; }
+      const pyramid = createPyramidStair(localBoundary, solution, {}, (prefix) => `${prefix}-${crypto.randomUUID()}`);
+      // Ring 0 IS the drawn boundary, so consuming it loses no geometry — and leaving it
+      // as a deck-boundary would charge field decking underneath the steps.
+      let next = { ...documentModel, objects: documentModel.objects.filter((object) => object.id !== localBoundary.id) };
+      next = upsertObject(next, pyramid);
+      selected = { kind: null, id: null };
+      pyramidDraft = null;
+      message = `Pyramid steps created · ${solution.ringCount} boxes · ${solution.riserCount} risers at ${solution.riserHeight.toFixed(2)}″`;
+      commit(next, 'Convert deck area to pyramid steps');
     });
   }
   const stairCoveringSelect = app.querySelector('#stair-covering-style');
@@ -3802,6 +3856,33 @@ function handleAction(action, source = null) {
   }
   if (action === 'close-project-menu') { projectMenuOpen = false; pendingProjectDeleteId = null; oneDriveProjects = []; render(); return; }
   if (action.startsWith('onedrive-')) { handleOneDriveAction(action, source); return; }
+  if (action === 'open-pyramid') {
+    const reference = selected.kind === 'dimension' ? resolveDimensionReference(selected.id) : null;
+    const localBoundary = reference?.kind === 'area' ? reference.boundary : null;
+    if (!localBoundary) { message = 'Select a deck area first'; render(); return; }
+    const hostEdgeId = pyramidHostEdgeId(localBoundary);
+    pyramidDraft = {
+      boundaryId: localBoundary.id,
+      hostEdgeId,
+      // Prefilled from this deck's own drop when it already sits below its neighbour.
+      totalRise: String(getBoundaryLevelDown(localBoundary) || ''),
+      treadDepth: String(TREAD_DEPTH_PRESETS[0]),
+      treadPreset: TREAD_DEPTH_PRESETS[0],
+      // Every side except the one meeting the deck starts selected: wrapping is the
+      // common case, and unticking a side is easier than hunting for all of them.
+      steppingEdgeIds: localBoundary.edges.filter((edge) => edge.id !== hostEdgeId).map((edge) => edge.id),
+    };
+    render();
+    return;
+  }
+  if (action === 'close-pyramid') { closePyramid(); return; }
+  if (action === 'set-pyramid-tread') {
+    readPyramidForm();
+    const tread = Number(source?.dataset?.tread);
+    pyramidDraft = { ...pyramidDraft, treadDepth: String(tread), treadPreset: tread };
+    render();
+    return;
+  }
   if (action === 'toggle-export-menu') { exportMenuOpen = !exportMenuOpen; projectMenuOpen = false; pendingProjectDeleteId = null; render(); return; }
   if (action === 'open-takeoff') { takeoffOpen = true; exportMenuOpen = false; projectMenuOpen = false; takeoffAddCategory = null; message = 'Editable project takeoff generated'; render(); return; }
   if (action === 'close-takeoff') { takeoffOpen = false; takeoffAddCategory = null; message = 'Takeoff saved with this project'; render(); return; }
@@ -4433,6 +4514,81 @@ function downloadJson(payload, suffix) {
   URL.revokeObjectURL(url);
 }
 
+const pyramidBoundary = () => boundaries().find((entry) => entry.id === pyramidDraft?.boundaryId) ?? null;
+
+/**
+ * The edge that meets another deck cannot step — the pyramid descends from it.
+ * Detected by midpoint proximity rather than shared vertex ids, because two decks
+ * drawn against each other rarely share vertex objects.
+ */
+const vertexIndex = (localBoundary) => new Map(localBoundary.vertices.map((vertex) => [vertex.id, vertex]));
+const edgeEnds = (byId, edge) => [byId.get(edge.startVertexId), byId.get(edge.endVertexId)];
+
+function pyramidHostEdgeId(localBoundary) {
+  const others = boundaries().filter((entry) => entry.id !== localBoundary.id);
+  if (!others.length) return null;
+  const byId = vertexIndex(localBoundary);
+  let best = null;
+  for (const edge of localBoundary.edges) {
+    const [start, end] = edgeEnds(byId, edge);
+    if (!start || !end) continue;
+    const middle = { x: (start.x + end.x) / 2, y: (start.y + end.y) / 2 };
+    for (const other of others) {
+      const otherById = vertexIndex(other);
+      for (const candidate of other.edges) {
+        const [otherStart, otherEnd] = edgeEnds(otherById, candidate);
+        if (!otherStart || !otherEnd) continue;
+        const gap = nearestPointOnSegment(middle, otherStart, otherEnd).distance;
+        if (Number.isFinite(gap) && gap <= 1 && (!best || gap < best.gap)) best = { edgeId: edge.id, gap };
+      }
+    }
+  }
+  return best?.edgeId ?? null;
+}
+
+function pyramidEdgeRows() {
+  const localBoundary = pyramidBoundary();
+  if (!localBoundary) return [];
+  const byId = vertexIndex(localBoundary);
+  const hostEdgeId = pyramidDraft?.hostEdgeId ?? null;
+  return localBoundary.edges.map((edge, index) => {
+    const [start, end] = edgeEnds(byId, edge);
+    return {
+      id: edge.id,
+      label: `Side ${index + 1}`,
+      lengthInches: start && end ? Math.hypot(end.x - start.x, end.y - start.y) : 0,
+      isHostEdge: edge.id === hostEdgeId,
+    };
+  });
+}
+
+function pyramidSolution() {
+  const localBoundary = pyramidBoundary();
+  if (!localBoundary || !pyramidDraft) return { ok: false, reason: 'Select a deck area first.' };
+  return solvePyramidStair({
+    boundary: localBoundary,
+    steppingEdgeIds: pyramidDraft.steppingEdgeIds,
+    totalRise: pyramidDraft.totalRise,
+    treadDepth: pyramidDraft.treadDepth,
+  });
+}
+
+function readPyramidForm() {
+  const form = app.querySelector('#pyramid-form');
+  if (!form || !pyramidDraft) return;
+  pyramidDraft = {
+    ...pyramidDraft,
+    totalRise: form.elements.totalRise?.value ?? pyramidDraft.totalRise,
+    treadDepth: form.elements.treadDepth?.value ?? pyramidDraft.treadDepth,
+    steppingEdgeIds: [...form.querySelectorAll('input[name="steppingEdge"]:checked')].map((input) => input.dataset.edgeId),
+  };
+}
+
+function closePyramid() {
+  pyramidDraft = null;
+  render();
+}
+
 async function handleOneDriveAction(action, source) {
   if (action === 'onedrive-connect') {
     message = 'Connecting to OneDrive…';
@@ -4771,7 +4927,7 @@ function repeatLastCatSegment() {
 }
 
 window.addEventListener('keydown', (event) => {
-  if (referenceDraft) return;
+  if (referenceDraft || pyramidDraft) return;
   if (event.key === 'Escape' && archMode) {
     event.preventDefault(); archMode = null; archGesture = null; archDraft = null;
     message = 'Arch line canceled'; render(); return;

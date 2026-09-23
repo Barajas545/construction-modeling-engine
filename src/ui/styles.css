@@ -613,3 +613,18 @@ button { color: inherit; }
 .onedrive-remote-row:hover { border-color: #5a6b76; background: rgb(32 40 46 / 90%); }
 .onedrive-remote-row code { flex: none; color: #9fb0ba; font-size: 9px; }
 .onedrive-remote-row span { overflow: hidden; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Pyramid / box steps — stacked full boxes, smaller on top */
+.pyramid-ring { fill: rgb(84 214 199 / 9%); stroke: none; pointer-events: none; }
+.pyramid-ring-edge { fill: none; stroke: var(--cyan); stroke-width: 1.1; stroke-linejoin: round; pointer-events: none; }
+.pyramid-dialog .pyramid-edges { display: grid; gap: 6px; margin: 12px 0; }
+.pyramid-dialog .pyramid-edge { display: flex; align-items: baseline; gap: 8px; border: 1px solid #42545b; border-radius: 8px; background: #0a1115; padding: 9px 11px; cursor: pointer; }
+.pyramid-dialog .pyramid-edge.locked { opacity: .55; cursor: default; }
+.pyramid-dialog .pyramid-edge input { flex: none; width: 16px; margin: 0; }
+.pyramid-dialog .pyramid-edge small { color: #a4bac4; }
+.pyramid-dialog .pyramid-edge .object-badge { margin-left: auto; border-radius: 4px; background: #2b343b; padding: 2px 6px; color: #9fb0ba; font-size: 9px; }
+.pyramid-dialog .pyramid-presets { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; }
+.pyramid-summary { display: grid; gap: 6px; }
+.pyramid-summary-row { display: flex; justify-content: space-between; gap: 16px; font-size: 13px; }
+.pyramid-summary-row span { color: #a4bac4; }
+.pyramid-summary-reason { margin: 6px 0 0; color: #e2703c; font-size: 13px; }
