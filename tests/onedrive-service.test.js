@@ -79,6 +79,59 @@ test('nothing is uploaded while signed out', async () => {
   assert.equal(await service.saveNow(project()), null);
 });
 
+test('an empty new project claims no OneDrive folder or project number', async () => {
+  const { fake, service, runTimers } = harness();
+  await service.connect();
+  const empty = createProjectDocument({ id: 'empty-1', name: 'Deck project 2', now });
+
+  service.scheduleSave(empty);
+  runTimers();
+  await new Promise((resolve) => setImmediate(resolve));
+  assert.equal((await service.saveNow(empty)).status, 'empty');
+
+  const folders = fake.folderList().filter((f) => /CME-\d{6}/.test(f));
+  assert.deepEqual(folders, [], 'an abandoned new project should not reserve a number');
+  assert.equal(service.describeLocation(empty), null);
+});
+
+test('a project syncs as soon as it holds a construction object', async () => {
+  const { fake, service } = harness();
+  await service.connect();
+  const empty = createProjectDocument({ id: 'grows-1', name: 'Smith Backyard Deck', now });
+  assert.equal((await service.saveNow(empty)).status, 'empty');
+
+  const drawn = upsertObject(empty, createDeckBoundary([{ x: 0, y: 0 }, { x: 120, y: 0 }, { x: 120, y: 120 }, { x: 0, y: 120 }]), now);
+  assert.equal((await service.saveNow(drawn)).status, 'saved');
+  assert.ok(fake.read(`${FOLDER}/project.cme.json`));
+});
+
+test('a stored project keeps syncing after its last object is deleted', async () => {
+  const { fake, service } = harness();
+  await service.connect();
+  const saved = (await service.saveNow(project())).document;
+
+  // Deleting the last object must still reach OneDrive, not strand a stale copy.
+  const emptied = { ...saved, objects: [] };
+  assert.equal((await service.saveNow(emptied)).status, 'saved');
+  assert.equal(JSON.parse(fake.read(`${FOLDER}/project.cme.json`)).objects.length, 0);
+});
+
+test('a save hands back the numbered document so the device copy can match it', async () => {
+  const fake = createFakeDrive({ folders: [] });
+  const saved = [];
+  const service = createOneDriveService({
+    config, auth: fakeAuth(), storage: createMemoryStorage(), now: () => now,
+    fetch: fake.fetch, sleep: async () => {}, onSaved: (document) => saved.push(document),
+  });
+  await service.connect();
+
+  // An autosave, not just the explicit button, must report the assigned number.
+  await service.saveNow(project());
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].projectNumber, 1);
+  assert.equal(saved[0].id, 'project-1');
+});
+
 test('a save reports where the project landed', async () => {
   const { service } = harness();
   await service.connect();

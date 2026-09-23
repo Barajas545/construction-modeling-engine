@@ -123,7 +123,19 @@ let oneDriveState = null;
 let oneDriveProjects = [];
 let oneDriveListing = false;
 // Re-render whenever the sync status changes so the status line stays honest.
-const oneDrive = createOneDriveService({ onChange: (state) => { oneDriveState = state; if (projectMenuOpen) render(); } });
+const oneDrive = createOneDriveService({
+  onChange: (state) => { oneDriveState = state; if (projectMenuOpen) render(); },
+  // The first save assigns the project number. Record it on the device copy so
+  // the two agree, writing storage directly rather than through persist() so
+  // this does not schedule yet another save.
+  onSaved: (saved) => {
+    if (saved.id !== documentModel.id || documentModel.projectNumber === saved.projectNumber) return;
+    documentModel = { ...documentModel, projectNumber: saved.projectNumber };
+    projectLibrary = upsertLibraryProject(projectLibrary, documentModel);
+    localStorage.setItem(PROJECT_LIBRARY_STORAGE_KEY, serializeProjectLibrary(projectLibrary));
+    localStorage.setItem(STORAGE_KEY, serializeProject(documentModel));
+  },
+});
 oneDriveState = oneDrive.state();
 let takeoffExpanded = new Set(['decking', 'railing']);
 let takeoffAddCategory = null;
@@ -4441,10 +4453,9 @@ async function handleOneDriveAction(action, source) {
   if (action === 'onedrive-save-now') {
     const result = await oneDrive.saveNow(documentModel);
     if (result?.status === 'saved') {
-      // The save assigns the project number on first write; keep it locally.
-      documentModel = { ...documentModel, projectNumber: result.document.projectNumber };
-      persist();
       message = `Saved to OneDrive · ${result.paths.folder}`;
+    } else if (result?.status === 'empty') {
+      message = 'Nothing to sync yet · add a deck boundary first';
     } else if (result?.status !== 'conflict') message = oneDrive.state().detail || 'OneDrive save failed';
     render();
     return;

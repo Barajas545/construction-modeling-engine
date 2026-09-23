@@ -8,6 +8,8 @@
 - Sign-in uses Microsoft Entra ID with PKCE through MSAL Browser, loaded from a CDN because CME has no build step. Tokens are held in `sessionStorage`, which suits a shared field tablet. A blocked popup falls back to a full-page redirect, since tablets and embedded browsers routinely refuse popups.
 - `project.cme.json` is written before the `Exports` and `Attachments` tree is laid out, so an interrupted first save cannot leave a numbered folder that holds no project. The layout is provisioned once per project rather than on every save, which reduces a repeat autosave to a single request; a project folder deleted in OneDrive is rebuilt on the next save instead of losing the edit.
 - Edits made before sign-in finishes resuming are buffered and synced as soon as the connection is established, rather than waiting for the next change.
+- A project claims its OneDrive folder and number only once it holds a construction object, so an abandoned **+ New project** no longer reserves a number it never uses. A project that has already been stored keeps syncing after its last object is deleted, so removals still reach OneDrive.
+- The number assigned by the first save is written back to the device copy, so the local project and OneDrive agree on identity after an autosave rather than only after an explicit save.
 
 Storage sits behind an explicit adapter boundary in `src/core/storage/`: path derivation, the Graph client, sync orchestration, and auth are separate modules, each injectable and tested without network access. Nothing in the modeling tools depends on OneDrive.
 

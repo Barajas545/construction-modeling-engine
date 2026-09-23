@@ -27,6 +27,10 @@ export function createOneDriveService({
   auth = null,
   storage = globalThis.localStorage,
   onChange = () => {},
+  // Called with the stored document after every successful save. The save is
+  // what assigns the project number, so the caller needs this to keep its own
+  // copy in step; otherwise the device copy and OneDrive disagree on identity.
+  onSaved = () => {},
   now = () => new Date().toISOString(),
   setTimeoutImpl = globalThis.setTimeout,
   clearTimeoutImpl = globalThis.clearTimeout,
@@ -68,8 +72,24 @@ export function createOneDriveService({
     set(SYNC_STATUS.error, error?.message ?? 'OneDrive save failed.');
   }
 
+  /**
+   * A project earns its OneDrive folder and number by holding something. An
+   * abandoned "+ New project" would otherwise reserve a number and a full
+   * folder tree it never uses, until CME-000050 no longer means fifty decks.
+   *
+   * A project that has already been stored keeps syncing even once emptied, so
+   * deleting the last object still reaches OneDrive rather than stranding a
+   * stale copy there.
+   */
+  function storable(document) {
+    if (!document) return false;
+    if (document.objects?.length > 0) return true;
+    return sync.projectState(document.id)?.projectNumber != null;
+  }
+
   async function saveNow(document) {
     if (!account || !document) return null;
+    if (!storable(document)) return { status: 'empty' };
     inFlight = true;
     set(SYNC_STATUS.saving);
     try {
@@ -81,6 +101,7 @@ export function createOneDriveService({
       }
       conflict = null;
       lastSavedAt = now();
+      onSaved(result.document);
       set(SYNC_STATUS.saved, result.paths.folder);
       return result;
     } catch (error) {
@@ -143,6 +164,7 @@ export function createOneDriveService({
       // next change. connect() and resume() flush whatever is buffered here.
       pending = document;
       if (!account || !isOneDriveConfigured(config)) return;
+      if (!storable(document)) return; // nothing worth a folder and a number yet
       if (timer) clearTimeoutImpl(timer);
       timer = setTimeoutImpl(() => {
         timer = null;
